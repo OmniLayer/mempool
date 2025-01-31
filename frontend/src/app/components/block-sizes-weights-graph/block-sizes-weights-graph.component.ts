@@ -1,16 +1,16 @@
-import { ChangeDetectionStrategy, Component, Inject, Input, LOCALE_ID, OnInit, HostBinding, NgZone } from '@angular/core';
-import { EChartsOption} from 'echarts';
+import { ChangeDetectionStrategy, Component, Inject, Input, LOCALE_ID, OnInit, HostBinding } from '@angular/core';
+import { EChartsOption} from '@app/graphs/echarts';
 import { Observable } from 'rxjs';
 import { map, share, startWith, switchMap, tap } from 'rxjs/operators';
-import { ApiService } from 'src/app/services/api.service';
-import { SeoService } from 'src/app/services/seo.service';
+import { ApiService } from '@app/services/api.service';
+import { SeoService } from '@app/services/seo.service';
 import { formatNumber } from '@angular/common';
-import { FormBuilder, FormGroup } from '@angular/forms';
-import { StorageService } from 'src/app/services/storage.service';
-import { MiningService } from 'src/app/services/mining.service';
-import { StateService } from 'src/app/services/state.service';
-import { Router } from '@angular/router';
-import { download } from 'src/app/shared/graphs.utils';
+import { UntypedFormBuilder, UntypedFormGroup } from '@angular/forms';
+import { StorageService } from '@app/services/storage.service';
+import { MiningService } from '@app/services/mining.service';
+import { ActivatedRoute } from '@angular/router';
+import { download, formatterXAxis } from '@app/shared/graphs.utils';
+import { StateService } from '@app/services/state.service';
 
 @Component({
   selector: 'app-block-sizes-weights-graph',
@@ -21,7 +21,7 @@ import { download } from 'src/app/shared/graphs.utils';
       position: absolute;
       top: 50%;
       left: calc(50% - 15px);
-      z-index: 100;
+      z-index: 99;
     }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -31,7 +31,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
   @Input() left: number | string = 75;
 
   miningWindowPreference: string;
-  radioGroupForm: FormGroup;
+  radioGroupForm: UntypedFormGroup;
 
   chartOptions: EChartsOption = {};
   chartInitOptions = {
@@ -50,26 +50,34 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
     @Inject(LOCALE_ID) public locale: string,
     private seoService: SeoService,
     private apiService: ApiService,
-    private formBuilder: FormBuilder,
+    private formBuilder: UntypedFormBuilder,
     private storageService: StorageService,
     private miningService: MiningService,
-    private stateService: StateService,
-    private router: Router,
-    private zone: NgZone,
+    public stateService: StateService,
+    private route: ActivatedRoute,
   ) {
   }
 
   ngOnInit(): void {
     let firstRun = true;
 
-    this.seoService.setTitle($localize`:@@mining.hashrate-difficulty:Hashrate and Weight`);
+    this.seoService.setTitle($localize`:@@56fa1cd221491b6478998679cba2dc8d55ba330d:Block Sizes and Weights`);
+    this.seoService.setDescription($localize`:@@meta.description.bitcoin.graphs.block-sizes:See Bitcoin block sizes (MB) and block weights (weight units) visualized over time.`);
     this.miningWindowPreference = this.miningService.getDefaultTimespan('24h');
     this.radioGroupForm = this.formBuilder.group({ dateSpan: this.miningWindowPreference });
     this.radioGroupForm.controls.dateSpan.setValue(this.miningWindowPreference);
 
+    this.route
+      .fragment
+      .subscribe((fragment) => {
+        if (['24h', '3d', '1w', '1m', '3m', '6m', '1y', '2y', '3y', 'all'].indexOf(fragment) > -1) {
+          this.radioGroupForm.controls.dateSpan.setValue(fragment, { emitEvent: false });
+        }
+      });
+
     this.blockSizesWeightsObservable$ = this.radioGroupForm.get('dateSpan').valueChanges
       .pipe(
-        startWith(this.miningWindowPreference),
+        startWith(this.radioGroupForm.controls.dateSpan.value),
         switchMap((timespan) => {
           this.timespan = timespan;
           if (!firstRun) {
@@ -83,8 +91,9 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
               tap((response) => {
                 const data = response.body;
                 this.prepareChartOptions({
-                  sizes: data.sizes.map(val => [val.timestamp * 1000, val.avg_size / 1000000, val.avg_height]),
-                  weights: data.weights.map(val => [val.timestamp * 1000, val.avg_weight / 1000000, val.avg_height]),
+                  sizes: data.sizes.map(val => [val.timestamp * 1000, val.avgSize / 1000000, val.avgHeight]),
+                  weights: data.weights.map(val => [val.timestamp * 1000, val.avgWeight / 1000000, val.avgHeight]),
+                  sizePerWeight: data.weights.map((val, i) => [val.timestamp * 1000, data.sizes[i].avgSize / (val.avgWeight / 4), val.avgHeight]),
                 });
                 this.isLoading = false;
               }),
@@ -107,7 +116,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
           color: 'grey',
           fontSize: 15
         },
-        text: `Indexing in progess`,
+        text: $localize`:@@23555386d8af1ff73f297e89dd4af3f4689fb9dd:Indexing blocks`,
         left: 'center',
         top: 'center'
       };
@@ -119,6 +128,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
       color: [
         '#FDD835',
         '#D81B60',
+        '#039BE5',
       ],
       grid: {
         top: 30,
@@ -136,32 +146,28 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
         borderRadius: 4,
         shadowColor: 'rgba(0, 0, 0, 0.5)',
         textStyle: {
-          color: '#b1b1b1',
+          color: 'var(--tooltip-grey)',
           align: 'left',
         },
         borderColor: '#000',
         formatter: (ticks) => {
-          let sizeString = '';
-          let weightString = '';
+          let tooltip = `<b style="color: white; margin-left: 2px">${formatterXAxis(this.locale, this.timespan, parseInt(ticks[0].axisValue, 10))}</b><br>`;
 
           for (const tick of ticks) {
             if (tick.seriesIndex === 0) { // Size
-              sizeString = `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.2-2')} MB`;
+              tooltip += `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.2-2')} MB`;
             } else if (tick.seriesIndex === 1) { // Weight
-              weightString = `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.2-2')} MWU`;
+              tooltip += `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.2-2')} MWU`;
+            } else if (tick.seriesIndex === 2) { // Size per weight
+              tooltip += `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.2-2')} B/vB`;
             }
+            tooltip += `<br>`;
           }
 
-          const date = new Date(ticks[0].data[0]).toLocaleDateString(this.locale, { year: 'numeric', month: 'short', day: 'numeric' });
-
-          let tooltip = `<b style="color: white; margin-left: 18px">${date}</b><br>
-            <span>${sizeString}</span><br>
-            <span>${weightString}</span>`;
-
           if (['24h', '3d'].includes(this.timespan)) {
-            tooltip += `<br><small>At block: ${ticks[0].data[2]}</small>`;
+            tooltip += `<small>` + $localize`At block: ${ticks[0].data[2]}` + `</small>`;
           } else {
-            tooltip += `<br><small>Around block ${ticks[0].data[2]}</small>`;
+            tooltip += `<small>` + $localize`Around block: ${ticks[0].data[2]}` + `</small>`;
           }
 
           return tooltip;
@@ -178,7 +184,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
         padding: 10,
         data: [
           {
-            name: 'Size',
+            name: $localize`:@@7faaaa08f56427999f3be41df1093ce4089bbd75:Size`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
               color: 'white',
@@ -186,7 +192,15 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
             icon: 'roundRect',
           },
           {
-            name: 'Weight',
+            name: $localize`:@@919f2fd60a898850c24b1584362bbf18a4628bcb:Weight`,
+            inactiveColor: 'rgb(110, 112, 121)',
+            textStyle: {
+              color: 'white',
+            },
+            icon: 'roundRect',
+          },
+          {
+            name: $localize`Size per weight`,
             inactiveColor: 'rgb(110, 112, 121)',
             textStyle: {
               color: 'white',
@@ -197,6 +211,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
         selected: JSON.parse(this.storageService.getValue('sizes_weights_legend'))  ?? {
           'Size': true,
           'Weight': true,
+          'Size per weight': true,
         }
       },
       yAxis: data.sizes.length === 0 ? undefined : [
@@ -215,7 +230,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
           splitLine: {
             lineStyle: {
               type: 'dotted',
-              color: '#ffffff66',
+              color: 'var(--transparent-fg)',
               opacity: 0.25,
             }
           },
@@ -224,7 +239,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
       series: data.sizes.length === 0 ? [] : [
         {
           zlevel: 1,
-          name: 'Size',
+          name: $localize`:@@7faaaa08f56427999f3be41df1093ce4089bbd75:Size`,
           showSymbol: false,
           symbol: 'none',
           data: data.sizes,
@@ -237,7 +252,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
             symbol: 'none',
             lineStyle: {
               type: 'solid',
-              color: '#ffffff66',
+              color: 'var(--transparent-fg)',
               opacity: 1,
               width: 1,
             },
@@ -255,10 +270,22 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
         {
           zlevel: 1,
           yAxisIndex: 0,
-          name: 'Weight',
+          name: $localize`:@@919f2fd60a898850c24b1584362bbf18a4628bcb:Weight`,
           showSymbol: false,
           symbol: 'none',
           data: data.weights,
+          type: 'line',
+          lineStyle: {
+            width: 2,
+          }
+        },
+        {
+          zlevel: 1,
+          yAxisIndex: 0,
+          name: $localize`Size per weight`,
+          showSymbol: false,
+          symbol: 'none',
+          data: data.sizePerWeight,
           type: 'line',
           lineStyle: {
             width: 2,
@@ -315,7 +342,7 @@ export class BlockSizesWeightsGraphComponent implements OnInit {
     const now = new Date();
     // @ts-ignore
     this.chartOptions.grid.bottom = 40;
-    this.chartOptions.backgroundColor = '#11131f';
+    this.chartOptions.backgroundColor = 'var(--active-bg)';
     this.chartInstance.setOption(this.chartOptions);
     download(this.chartInstance.getDataURL({
       pixelRatio: 2,

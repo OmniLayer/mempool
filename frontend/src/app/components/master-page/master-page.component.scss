@@ -1,5 +1,14 @@
+.sticky-header {
+  position: sticky;
+  position: -webkit-sticky;
+  top: 0;
+  width: 100%;
+  background-color: var(--bg);
+  z-index: 100;
+}
+
 li.nav-item.active {
-  background-color: #653b9c;
+  background-color: var(--tertiary);
 }
 
 fa-icon {
@@ -9,12 +18,29 @@ fa-icon {
 .navbar {
   z-index: 100;
   min-height: 64px;
+  width: 100%;
+  background-color: var(--nav-bg);
 }
 
 li.nav-item {
   margin: auto 10px;
   padding-left: 10px;
   padding-right: 10px;
+  @media (max-width: 992px) {
+    margin: auto 7px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  @media (max-width: 429px) {
+    margin: auto 5px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+  @media (max-width: 369px) {
+    margin: auto 3px;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
 }
 
 @media (min-width: 992px) {
@@ -34,12 +60,12 @@ li.nav-item {
 }
 
 .navbar-nav {
-  background: #212121;
+  background: var(--nav-bg);
   bottom: 0;
   box-shadow: 0px 0px 15px 0px #000;
   flex-direction: row;
   left: 0;
-  justify-content: center;
+  justify-content: space-between;
   position: fixed;
   width: 100%;
   @media (min-width: 992px) {
@@ -50,15 +76,25 @@ li.nav-item {
   }
   a {
     font-size: 0.8em;
-    @media (min-width: 375px) {
+    @media (min-width: 370px) {
+      font-size: 0.9em;
+    }
+    @media (min-width: 430px) {
       font-size: 1em;
     }
+  }
+
+  li {
+    flex-grow: 1; /* Allows items to grow */
+    text-align: center; /* For text alignment */
   }
 }
 
 
 .navbar-collapse {
-  flex-basis: auto;
+  @media (min-width: 564px) {
+    flex-basis: auto;
+  }
   justify-content: flex-end;
 }
 
@@ -68,21 +104,24 @@ li.nav-item {
   }
 }
 
-.navbar-brand {
-  width: 60%;
-}
-
 .navbar {
   .dropdown {
     .dropdown-toggle {
       width: 62px;
+      height: 36px;
+      margin-top: 5px;
     }
   }
 }
 
-@media (min-width: 576px) {
-  .navbar-brand {
-    width: 140px;
+.navbar-brand {
+  position: relative;
+}
+
+.navbar-brand.dual-logos {
+  justify-content: space-between;
+  @media (max-width: 767.98px) {
+    width: 100%;
   }
 }
 
@@ -92,9 +131,8 @@ nav {
 
 .connection-badge {
   position: absolute;
-  top: 13px;
-  left: 0px;
-  width: 140px;
+  top: 12px;
+  width: 100%;
 }
 
 .badge {
@@ -103,23 +141,23 @@ nav {
 }
 
 .mainnet.active {
-  background-color: #653b9c;
+  background-color: var(--tertiary);
 }
 
 .liquid.active {
-  background-color: #116761;
+  background-color: var(--liquid);
 }
 
 .liquidtestnet.active {
-  background-color: #494a4a;
+  background-color: var(--liquidtestnet);
 }
 
 .testnet.active {
-  background-color: #1d486f;
+  background-color: var(--testnet);
 }
 
 .signet.active {
-  background-color: #6f1d5d;
+  background-color: var(--signet);
 }
 
 .dropdown-divider {
@@ -143,5 +181,117 @@ nav {
   }
 }
 .navbar-dark .navbar-nav .nav-link {
-  color: #f1f1f1;
+  color: var(--icon);
+}
+
+.subdomain_logo {
+  height: 35px;
+  overflow: clip;
+  max-width: 140px;
+  margin: auto;
+  align-self: center;
+  .rounded {
+    border-radius: 5px;
+  }
+}
+
+.subdomain_container {
+  max-width: 140px;
+  text-align: center;
+  align-self: center;
+}
+
+.vertical-line {
+  border-left: 1px solid #444;
+  height: 30px;
+  margin-left: 20px;
+  margin-right: 20px;
+  margin-top: 3px;
+}
+
+.logo-holder {
+  display: flex;
+  flex-direction: row;
+}
+
+.navbar-brand {
+  flex-direction: row;
+  display: flex;
+}
+
+.mempool-logo, app-svg-images {
+  align-self: center;
+  width: 140px;
+  height: 35px;
+}
+
+.beta {
+  display: inline;
+  position: absolute;
+  margin: 24px 0px 0px -15px;
+  font-size: 8px;
+  @media (max-width: 767.98px) {
+    margin: 30px 0px 0px -19px;
+    font-size: 7px;
+  }
+  @media (max-width: 3429px) {
+    margin: 25px 0px 0px -19px;
+    font-size: 7px;
+  }
+  @media (max-width: 369px) {
+    margin: 20px 0px 0px -19px;
+    font-size: 7px;
+  }
+}
+
+.beta-network {
+  font-size: 8px;
+}
+
+.current-network-svg {
+  width: 20px;
+  height: 20px;
+  margin-right: 5px;
+}
+
+:host-context(.rtl-layout) {
+  .current-network-svg {
+    width: 20px;
+    height: 20px;
+    margin-left: 5px;
+    margin-right: 0px;
+  }
+}
+
+.profile_image_container {
+  width: 35px;
+  margin-right: 15px;
+  text-align: center;
+  align-self: center;
+  cursor: pointer;
+  .anon {
+    border: 1.5px solid lightgrey;
+    color: lightgrey;
+    border-radius: 5px;
+  }
+}
+.profile_image {
+  height: 35px;
+  border-radius: 5px;
+}
+
+main {
+  transition: 0.2s;
+  transition-property: max-width;
+}
+
+// empty sidenav
+.empty-sidenav {
+  z-index: 1;
+  background-color: transparent;
+  width: 0px;
+  height: calc(100vh - 65px);
+  position: sticky;
+  top: 65px;
+  padding-bottom: 20px;
 }

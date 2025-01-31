@@ -1,17 +1,20 @@
-import { Component, OnInit, Input, ViewChild, ElementRef } from '@angular/core';
-import { Env, StateService } from '../../services/state.service';
-import { Observable, merge, of } from 'rxjs';
-import { SeoService } from '../../services/seo.service';
-import { tap } from 'rxjs/operators';
+import { Component, OnInit, Input, QueryList, AfterViewInit, ViewChildren } from '@angular/core';
+import { Env, StateService } from '@app/services/state.service';
+import { Observable, merge, of, Subject, Subscription } from 'rxjs';
+import { tap, takeUntil } from 'rxjs/operators';
 import { ActivatedRoute } from "@angular/router";
-import { faqData, restApiDocsData, wsApiDocsData } from './api-docs-data';
+import { faqData, restApiDocsData, wsApiDocsData } from '@app/docs/api-docs/api-docs-data';
+import { FaqTemplateDirective } from '@app/docs/faq-template/faq-template.component';
 
 @Component({
   selector: 'app-api-docs',
   templateUrl: './api-docs.component.html',
   styleUrls: ['./api-docs.component.scss']
 })
-export class ApiDocsComponent implements OnInit {
+export class ApiDocsComponent implements OnInit, AfterViewInit {
+  private destroy$: Subject<any> = new Subject<any>();
+  plainHostname = document.location.hostname;
+  electrsPort = 0;
   hostname = document.location.hostname;
   network$: Observable<string>;
   active = 0;
@@ -24,31 +27,53 @@ export class ApiDocsComponent implements OnInit {
   restDocs: any[];
   wsDocs: any;
   screenWidth: number;
+  officialMempoolInstance: boolean;
+  auditEnabled: boolean;
+  mobileViewport: boolean = false;
+  showMobileEnterpriseUpsell: boolean = true;
+  timeLtrSubscription: Subscription;
+  timeLtr: boolean = this.stateService.timeLtr.value;
+  isMempoolSpaceBuild = this.stateService.isMempoolSpaceBuild;
+
+  @ViewChildren(FaqTemplateDirective) faqTemplates: QueryList<FaqTemplateDirective>;
+  dict = {};
 
   constructor(
     private stateService: StateService,
-    private seoService: SeoService,
     private route: ActivatedRoute,
   ) { }
+
+  ngAfterContentChecked() {
+    if (this.faqTemplates) {
+      this.faqTemplates.forEach((x) => this.dict[x.type] = x.template);
+    }
+    this.desktopDocsNavPosition = ( window.pageYOffset > 115 ) ? "fixed" : "relative";
+    this.mobileViewport = window.innerWidth <= 992;
+  }
 
   ngAfterViewInit() {
     const that = this;
     setTimeout( () => {
       if( this.route.snapshot.fragment ) {
         this.openEndpointContainer( this.route.snapshot.fragment );
+        if (document.getElementById( this.route.snapshot.fragment )) {
+          let vOffset = ( window.innerWidth <= 992 ) ? 100 : 60;
+          window.scrollTo({
+            top: document.getElementById( this.route.snapshot.fragment ).offsetTop - vOffset
+          });
+        }
       }
-      window.addEventListener('scroll', function() {
-        that.desktopDocsNavPosition = ( window.pageYOffset > 182 ) ? "fixed" : "relative";
-      });
+      window.addEventListener('scroll', that.onDocScroll, { passive: true });
     }, 1 );
   }
 
   ngOnInit(): void {
     this.env = this.stateService.env;
-    this.seoService.setTitle($localize`:@@e351b40b3869a5c7d19c3d4918cb1ac7aaab95c4:API`);
+    this.officialMempoolInstance = this.env.OFFICIAL_MEMPOOL_SPACE;
+    this.auditEnabled = this.env.AUDIT;
     this.network$ = merge(of(''), this.stateService.networkChanged$).pipe(
       tap((network: string) => {
-        if (this.env.BASE_MODULE === 'mempool' && network !== '') {
+        if (this.env.BASE_MODULE === 'mempool' && network !== '' && this.env.ROOT_NETWORK === '') {
           this.baseNetworkUrl = `/${network}`;
         } else if (this.env.BASE_MODULE === 'liquid') {
           if (!['', 'liquid'].includes(network)) {
@@ -69,31 +94,58 @@ export class ApiDocsComponent implements OnInit {
     this.restDocs = restApiDocsData;
     this.wsDocs = wsApiDocsData;
 
-    this.network$.subscribe((network) => {
+    this.network$.pipe(takeUntil(this.destroy$)).subscribe((network) => {
       this.active = (network === 'liquid' || network === 'liquidtestnet') ? 2 : 0;
+      switch( network ) {
+        case "":
+          this.electrsPort = 50002; break;
+        case "mainnet":
+          this.electrsPort = 50002; break;
+        case "testnet":
+          this.electrsPort = 60002; break;
+        case "testnet4":
+          this.electrsPort = 40002; break;
+        case "signet":
+          this.electrsPort = 60602; break;
+        case "liquid":
+          this.electrsPort = 51002; break;
+        case "liquidtestnet":
+          this.electrsPort = 51302; break;
+      }
+    });
+
+    this.timeLtrSubscription = this.stateService.timeLtr.subscribe((ltr) => {
+      this.timeLtr = !!ltr;
     });
   }
 
-  anchorLinkClick( event: any ) {
-    let targetId = "";
-    if( event.target.nodeName === "A" ) {
-      targetId = event.target.hash.substring(1);
-    } else {
-      let element = event.target;
-      while( element.nodeName !== "A" ) {
-        element = element.parentElement;
-      }
-      targetId = element.hash.substring(1);
-    }
-    if( this.route.snapshot.fragment === targetId ) {
-      document.getElementById( targetId ).scrollIntoView();
-    }
+  ngOnDestroy(): void {
+    this.destroy$.next(true);
+    this.destroy$.complete();
+    window.removeEventListener('scroll', this.onDocScroll);
+    this.timeLtrSubscription.unsubscribe();
+  }
+
+  onDocScroll() {
+    this.desktopDocsNavPosition = ( window.pageYOffset > 115 ) ? "fixed" : "relative";
+  }
+
+  anchorLinkClick( e ) {
+    let targetId = e.fragment;
+    let vOffset = ( window.innerWidth <= 992 ) ? 100 : 60;
+    window.scrollTo({
+      top: document.getElementById( targetId ).offsetTop - vOffset
+    });
+    window.history.pushState({}, null, document.location.href.split("#")[0] + "#" + targetId);
     this.openEndpointContainer( targetId );
   }
 
   openEndpointContainer( targetId ) {
-    const tabHeaderHeight = document.getElementById( targetId + "-tab-header" ).scrollHeight;
-    if( ( window.innerWidth <= 992 ) && ( ( this.whichTab === 'rest' ) || ( this.whichTab === 'faq' ) ) && targetId ) {
+    let tabHeaderHeight = 0;
+    if (document.getElementById( targetId + "-tab-header" )) {
+      tabHeaderHeight = document.getElementById( targetId + "-tab-header" ).scrollHeight;
+    }
+    if( ( window.innerWidth <= 992 ) && ( ( this.whichTab === 'rest' ) || ( this.whichTab === 'faq' ) || ( this.whichTab === 'websocket' ) ) && targetId ) {
       const endpointContainerEl = document.querySelector<HTMLElement>( "#" + targetId );
       const endpointContentEl = document.querySelector<HTMLElement>( "#" + targetId + " .endpoint-content" );
       const endPointContentElHeight = endpointContentEl.clientHeight;
@@ -121,6 +173,9 @@ export class ApiDocsComponent implements OnInit {
     if (network === 'testnet') {
       curlResponse = code.codeSampleTestnet.curl;
     }
+    if (network === 'testnet4') {
+      curlResponse = code.codeSampleTestnet.curl;
+    }
     if (network === 'signet') {
       curlResponse = code.codeSampleSignet.curl;
     }
@@ -130,10 +185,6 @@ export class ApiDocsComponent implements OnInit {
     if (network === 'liquidtestnet') {
       curlResponse = code.codeSampleLiquidTestnet.curl;
     }
-    if (network === 'bisq') {
-      curlResponse = code.codeSampleBisq.curl;
-    }
-
     let curlNetwork = '';
     if (this.env.BASE_MODULE === 'mempool') {
       if (!['', 'mainnet'].includes(network)) {
@@ -145,6 +196,10 @@ export class ApiDocsComponent implements OnInit {
       }
     }
 
+    if (network === this.env.ROOT_NETWORK) {
+      curlNetwork = '';
+    }
+
     let text = code.codeTemplate.curl;
     for (let index = 0; index < curlResponse.length; index++) {
       const curlText = curlResponse[index];
@@ -152,12 +207,28 @@ export class ApiDocsComponent implements OnInit {
       text = text.replace('%{' + indexNumber + '}', curlText);
     }
 
-    if (websocket) {
-      const wsHostname = this.hostname.replace('https://', 'wss://');
-      wsHostname.replace('http://', 'ws://');
-      return `${wsHostname}${curlNetwork}${text}`;
-    }
     return `${this.hostname}${curlNetwork}${text}`;
+  }
+
+  websocketUrl(network: string) {
+    let curlNetwork = '';
+    if (this.env.BASE_MODULE === 'mempool') {
+      if (!['', 'mainnet'].includes(network)) {
+        curlNetwork = `/${network}`;
+      }
+    } else if (this.env.BASE_MODULE === 'liquid') {
+      if (!['', 'liquid'].includes(network)) {
+        curlNetwork = `/${network}`;
+      }
+    }
+
+    if (network === this.env.ROOT_NETWORK) {
+      curlNetwork = '';
+    }
+
+    let wsHostname = this.hostname.replace('https://', 'wss://');
+    wsHostname = wsHostname.replace('http://', 'ws://');
+    return `${wsHostname}${curlNetwork}/api/v1/ws`;
   }
 
 }

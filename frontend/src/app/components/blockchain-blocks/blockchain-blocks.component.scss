@@ -1,6 +1,6 @@
 .bitcoin-block {
-  width: 125px;
-  height: 125px;
+  width: var(--block-size);
+  height: var(--block-size);
 }
 
 .blockLink {
@@ -19,10 +19,50 @@
   pointer-events: none;
 }
 
+.on-pool-name-text {
+  display: inline-block;
+  padding-top: 2px;
+  font-weight: normal;
+}
+
+
+.on-pool {
+  align-items: center;
+  background-color: var(--bg);
+  display: inline-block;
+  margin-top: 4px;
+  padding: .25em .4em;
+  border-radius: .25rem;
+}
+
+.on-pool-container {
+  align-items: center;
+  position: relative;
+  top: -8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.on-pool-container.selected {
+  top: 0px;
+}
+
+.pool-container {
+  margin-top: 12px;
+}
+
 .mined-block {
   position: absolute;
   top: 0px;
-  transition: 2s;
+  transition: background 2s, left 2s, transform 1s, opacity 1s;
+}
+
+.mined-block.offscreen {
+  opacity: 0;
+}
+
+.mined-block.placeholder-block {
+  background: none !important;
 }
 
 .block-size {
@@ -31,9 +71,11 @@
 }
 
 .blocks-container {
+  --block-size: 125px;
+  --block-offset: calc(0.32 * var(--block-size));
   position: absolute;
   top: 0px;
-  left: 40px;
+  left: var(--block-offset);
 }
 
 .block-body {
@@ -53,7 +95,7 @@
 .fee-span {
   font-size: 11px;
   margin-bottom: 5px;
-  color: #fff000;
+  color: var(--yellow);
 }
 
 .transaction-count {
@@ -73,11 +115,11 @@
 
 .bitcoin-block::after {
   content: '';
-  width: 125px;
-  height: 24px;
+  width: var(--block-size);
+  height: calc(0.192 * var(--block-size));
   position:absolute;
-  top: -24px;
-  left: -20px;
+  top: calc(-0.192 * var(--block-size));
+  left: calc(-0.16 * var(--block-size));
   background-color: #232838;
   transform:skew(40deg);
   transform-origin:top;
@@ -85,38 +127,56 @@
 
 .bitcoin-block::before {
   content: '';
-  width: 20px;
-  height: 125px;
+  width: calc(0.16 * var(--block-size));
+  height: var(--block-size);
   position: absolute;
-  top: -12px;
-  left: -20px;
+  top: calc(-0.096 * var(--block-size));
+  left: calc(-0.16 * var(--block-size));
   background-color: #191c27;
 
   transform: skewY(50deg);
   transform-origin: top;
 }
 
+.bitcoin-block.placeholder-block::after {
+  content: none;
+  background: 0;
+}
+
+.bitcoin-block.placeholder-block::before {
+  content: none;
+  background: 0;
+}
+
 .black-background {
-  background-color: #11131f;
+  background-color: var(--active-bg);
   z-index: 100;
   position: relative;
 }
 
 #arrow-up {
   position: relative;
-  left: 30px;
-  top: 140px;
+  left: calc(var(--block-size) * 0.6);
+  top: calc(var(--block-size) * 1.28);
   width: 0;
   height: 0;
-  border-left: 35px solid transparent;
-  border-right: 35px solid transparent;
-  border-bottom: 35px solid #FFF;
+  border-left: calc(var(--block-size) * 0.2) solid transparent;
+  border-right: calc(var(--block-size) * 0.2) solid transparent;
+  border-bottom: calc(var(--block-size) * 0.2) solid var(--fg);
 }
 
 .flashing {
-  animation: opacityPulse 2s ease-out;
+  /* force compositing */
+  will-change: opacity;
+  transform: translateZ(0);
+  /* effective max frame rate = (#keyframes - 1) x steps / duration */
+  animation: opacityPulse 2s steps(30, end);
   animation-iteration-count: infinite;
   opacity: 1;
+}
+
+.loading .bitcoin-block.mined-block {
+  background: var(--secondary);
 }
 
 @keyframes opacityPulse {
@@ -127,17 +187,49 @@
 
 .badge {
   position: relative;
-  top: 15px;
+  top: 19px;
   z-index: 101;
+  color: #FFF;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 145px;
+
+  &.miner-name {
+    max-width: 125px;
+  }
+}
+
+.pool-logo {
+  width: 15px;
+  height: 15px;
+  position: relative;
+  top: -1px;
+  margin-right: 2px;
+}
+
+.pool-logo.faded {
+  filter: grayscale(100%) brightness(1.5);
 }
 
 .animated {
   transition: all 0.15s ease-in-out;
+  white-space: nowrap;
 }
-.show {
-  opacity: 1;
+
+.time-ltr {
+  .bitcoin-block {
+    transform: scaleX(-1);
+  }
 }
-.hide {
-  opacity: 0;
-  pointer-events : none;
+
+.spotlight-bottom {
+  position: absolute;
+  width: calc(0.6 * var(--block-size));
+  height: calc(0.25 * var(--block-size));
+  border-left: solid calc(0.3 * var(--block-size)) transparent;
+  border-bottom: solid calc(0.3 * var(--block-size)) white;
+  border-right: solid calc(0.3 * var(--block-size)) transparent;
+  transform: translate(calc(0.2 * var(--block-size)), calc(1.1 * var(--block-size)));
+  border-radius: 2px;
+  z-index: -1;
 }

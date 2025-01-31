@@ -10,6 +10,7 @@
   padding: 0px 15px;
   width: 100%;
   height: calc(100% - 140px);
+  padding-bottom: 20px;
   @media (max-width: 992px) {
     height: calc(100% - 190px);
   };
@@ -23,48 +24,17 @@
   @media (max-width: 767.98px) {
     max-height: 230px;
   }
+  margin-bottom: 20px;
 }
 .chart-widget {
   width: 100%;
   height: 100%;
-  max-height: 270px;
+  @media (max-width: 767px) {
+    max-height: 240px;
+  }
   @media (max-width: 485px) {
     max-height: 200px;
   }
-}
-
-.formRadioGroup {
-  margin-top: 6px;
-  display: flex;
-  flex-direction: column;
-  @media (min-width: 991px) {
-    position: relative;
-    top: -65px;
-  }
-  @media (min-width: 830px) and (max-width: 991px) {
-    position: relative;
-    top: 0px;
-  }
-  @media (min-width: 830px) {
-    flex-direction: row;
-    float: right;
-    margin-top: 0px;
-  }
-  .btn-sm {
-    font-size: 9px;
-    @media (min-width: 830px) {
-      font-size: 14px;
-    }
-  }
-}
-
-.bottom-padding {
-  @media (max-width: 992px) {
-    padding-bottom: 65px
-  };
-  @media (max-width: 576px) {
-    padding-bottom: 65px
-  };
 }
 
 @media (max-width: 767.98px) {
@@ -74,11 +44,23 @@
   }
 }
 
+@media (max-width: 430px) {
+  .pool-name {
+    max-width: 110px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .health-column {
+    display: none;
+  }
+}
+
 .loadingGraphs {
   position: absolute;
   top: 50%;
   left: calc(50% - 15px);
-  z-index: 100;
+  z-index: 99;
 }
 
 .pool-distribution {
@@ -89,9 +71,10 @@
     flex-direction: row;
   }
   h5 {
-    margin-bottom: 10px;
+    margin-bottom: 5px;
   }
   .item {
+    max-width: 160px;
     width: 50%;
     display: inline-block;
     margin: 0px auto 20px;
@@ -102,6 +85,7 @@
       }
     }
     &:nth-child(3) {
+      width: 50%;
       order: 3;
       @media (min-width: 485px) {
         order: 2;
@@ -116,12 +100,15 @@
     }
     .card-title {
       font-size: 1rem;
-      color: #4a68b9;
+      color: var(--title-fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .card-text {
       font-size: 18px;
       span {
-        color: #ffffff66;
+        color: var(--transparent-fg);
         font-size: 12px;
       }
     }
@@ -133,4 +120,16 @@
   display: block;
   max-width: 80px;
   margin: 15px auto 3px;
+}
+
+
+td {
+  .difference {
+    &.positive {
+      color: rgb(66, 183, 71);
+    }
+    &.negative {
+      color: rgb(183, 66, 66);
+    }
+  }
 }

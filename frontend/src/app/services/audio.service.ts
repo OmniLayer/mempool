@@ -13,12 +13,12 @@ export class AudioService {
     } catch (e) {}
   }
 
-  public playSound(name: 'magic' | 'chime' | 'cha-ching' | 'bright-harmony') {
+  public playSound(name: 'magic' | 'chime' | 'cha-ching' | 'bright-harmony' | 'wind-chimes-harp-ascend' | 'ascend-chime-cartoon') {
     if (this.isPlaying || !this.audio) {
       return;
     }
     this.isPlaying = true;
-    this.audio.src = '../../../resources/sounds/' + name + '.mp3';
+    this.audio.src = '/resources/sounds/' + name + '.mp3';
     this.audio.load();
     this.audio.volume = 0.65; // 65% volume
     this.audio.play().catch((e) => {

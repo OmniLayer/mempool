@@ -1,15 +1,23 @@
 import { ChangeDetectionStrategy, ChangeDetectorRef, Component, Inject, Input, LOCALE_ID, OnInit, HostBinding } from '@angular/core';
-import { EChartsOption } from 'echarts';
+import { EChartsOption } from '@app/graphs/echarts';
 import { Observable } from 'rxjs';
 import { delay, map, retryWhen, share, startWith, switchMap, tap } from 'rxjs/operators';
-import { ApiService } from 'src/app/services/api.service';
-import { SeoService } from 'src/app/services/seo.service';
-import { FormBuilder, FormGroup } from '@angular/forms';
-import { poolsColor } from 'src/app/app.constants';
-import { StorageService } from 'src/app/services/storage.service';
-import { MiningService } from 'src/app/services/mining.service';
-import { download } from 'src/app/shared/graphs.utils';
-import { time } from 'console';
+import { ApiService } from '@app/services/api.service';
+import { SeoService } from '@app/services/seo.service';
+import { UntypedFormBuilder, UntypedFormGroup } from '@angular/forms';
+import { chartColors, poolsColor } from '@app/app.constants';
+import { StorageService } from '@app/services/storage.service';
+import { MiningService } from '@app/services/mining.service';
+import { download } from '@app/shared/graphs.utils';
+import { ActivatedRoute } from '@angular/router';
+import { StateService } from '@app/services/state.service';
+
+interface Hashrate {
+  timestamp: number;
+  avgHashRate: number;
+  share: number;
+  poolName: string;
+}
 
 @Component({
   selector: 'app-hashrate-chart-pools',
@@ -20,7 +28,7 @@ import { time } from 'console';
       position: absolute;
       top: 50%;
       left: calc(50% - 15px);
-      z-index: 100;
+      z-index: 99;
     }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -30,8 +38,9 @@ export class HashrateChartPoolsComponent implements OnInit {
   @Input() left: number | string = 25;
 
   miningWindowPreference: string;
-  radioGroupForm: FormGroup;
+  radioGroupForm: UntypedFormGroup;
 
+  hashrates: Hashrate[];
   chartOptions: EChartsOption = {};
   chartInitOptions = {
     renderer: 'svg',
@@ -48,10 +57,12 @@ export class HashrateChartPoolsComponent implements OnInit {
     @Inject(LOCALE_ID) public locale: string,
     private seoService: SeoService,
     private apiService: ApiService,
-    private formBuilder: FormBuilder,
+    private formBuilder: UntypedFormBuilder,
     private cd: ChangeDetectorRef,
     private storageService: StorageService,
-    private miningService: MiningService
+    private miningService: MiningService,
+    public stateService: StateService,
+    private route: ActivatedRoute,
   ) {
     this.radioGroupForm = this.formBuilder.group({ dateSpan: '1y' });
     this.radioGroupForm.controls.dateSpan.setValue('1y');
@@ -61,13 +72,22 @@ export class HashrateChartPoolsComponent implements OnInit {
     let firstRun = true;
 
     this.seoService.setTitle($localize`:@@mining.pools-historical-dominance:Pools Historical Dominance`);
-    this.miningWindowPreference = this.miningService.getDefaultTimespan('1m');
+    this.seoService.setDescription($localize`:@@meta.descriptions.bitcoin.graphs.hashrate-pools:See Bitcoin mining pool dominance visualized over time: see how top mining pools' share of total hashrate has fluctuated over time.`);
+    this.miningWindowPreference = this.miningService.getDefaultTimespan('6m');
     this.radioGroupForm = this.formBuilder.group({ dateSpan: this.miningWindowPreference });
     this.radioGroupForm.controls.dateSpan.setValue(this.miningWindowPreference);
 
+    this.route
+      .fragment
+      .subscribe((fragment) => {
+        if (['6m', '1y', '2y', '3y', 'all'].indexOf(fragment) > -1) {
+          this.radioGroupForm.controls.dateSpan.setValue(fragment, { emitEvent: false });
+        }
+      });
+
     this.hashrateObservable$ = this.radioGroupForm.get('dateSpan').valueChanges
       .pipe(
-        startWith(this.miningWindowPreference),
+        startWith(this.radioGroupForm.controls.dateSpan.value),
         switchMap((timespan) => {
           if (!firstRun) {
             this.storageService.setValue('miningWindowPreference', timespan);
@@ -78,56 +98,9 @@ export class HashrateChartPoolsComponent implements OnInit {
           return this.apiService.getHistoricalPoolsHashrate$(timespan)
             .pipe(
               tap((response) => {
-                const hashrates = response.body;
+                this.hashrates = response.body;
                 // Prepare series (group all hashrates data point by pool)
-                const grouped = {};
-                for (const hashrate of hashrates) {
-                  if (!grouped.hasOwnProperty(hashrate.poolName)) {
-                    grouped[hashrate.poolName] = [];
-                  }
-                  grouped[hashrate.poolName].push(hashrate);
-                }
-
-                const series = [];
-                const legends = [];
-                for (const name in grouped) {
-                  series.push({
-                    zlevel: 0,
-                    stack: 'Total',
-                    name: name,
-                    showSymbol: false,
-                    symbol: 'none',
-                    data: grouped[name].map((val) => [val.timestamp * 1000, val.share * 100]),
-                    type: 'line',
-                    lineStyle: { width: 0 },
-                    areaStyle: { opacity: 1 },
-                    smooth: true,
-                    color: poolsColor[name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()],
-                    emphasis: {
-                      disabled: true,
-                      scale: false,
-                    },
-                  });
-
-                  legends.push({
-                    name: name,
-                    inactiveColor: 'rgb(110, 112, 121)',
-                    textStyle: {
-                      color: 'white',
-                    },
-                    icon: 'roundRect',
-                    itemStyle: {
-                      color: poolsColor[name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()],
-                    },
-                  });
-                }
-
-                this.prepareChartOptions({
-                  legends: legends,
-                  series: series,
-                });
-                this.isLoading = false;
-
+                const series = this.applyHashrates();
                 if (series.length === 0) {
                   this.cd.markForCheck();
                   throw new Error();
@@ -147,6 +120,77 @@ export class HashrateChartPoolsComponent implements OnInit {
       );
   }
 
+  applyHashrates(): any[] {
+    const times: { [time: number]: { hashrates: { [pool: string]: Hashrate } } } = {};
+    const pools = {};
+    for (const hashrate of this.hashrates) {
+      if (!times[hashrate.timestamp]) {
+        times[hashrate.timestamp] = { hashrates: {} };
+      }
+      times[hashrate.timestamp].hashrates[hashrate.poolName] = hashrate;
+      if (!pools[hashrate.poolName]) {
+        pools[hashrate.poolName] = true;
+      }
+    }
+
+    const sortedTimes = Object.keys(times).sort((a,b) => parseInt(a) - parseInt(b)).map(time => ({ time: parseInt(time), hashrates: times[time].hashrates }));
+    const lastHashrates = sortedTimes[sortedTimes.length - 1].hashrates;
+    const sortedPools = Object.keys(pools).sort((a,b) => {
+      if (lastHashrates[b]?.share ?? lastHashrates[a]?.share ?? false) {
+        // sort by descending share of hashrate in latest period
+        return (lastHashrates[b]?.share || 0) - (lastHashrates[a]?.share || 0);
+      } else {
+        // tiebreak by pool name
+        b < a;
+      }
+    });
+
+    const series = [];
+    const legends = [];
+    for (const name of sortedPools) {
+      const data = sortedTimes.map(({ time, hashrates }) => {
+        return [time * 1000, (hashrates[name]?.share || 0) * 100];
+      });
+      series.push({
+        zlevel: 0,
+        stack: 'Total',
+        name: name,
+        showSymbol: false,
+        symbol: 'none',
+        data,
+        type: 'line',
+        lineStyle: { width: 0 },
+        areaStyle: { opacity: 1 },
+        smooth: true,
+        color: poolsColor[name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()],
+        emphasis: {
+          disabled: true,
+          scale: false,
+        },
+      });
+
+      legends.push({
+        name: name,
+        inactiveColor: 'rgb(110, 112, 121)',
+        textStyle: {
+          color: 'white',
+        },
+        icon: 'roundRect',
+        itemStyle: {
+          color: poolsColor[name.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()],
+        },
+      });
+    }
+
+    this.prepareChartOptions({
+      legends: legends,
+      series: series,
+    });
+    this.isLoading = false;
+
+    return series;
+  }
+
   prepareChartOptions(data) {
     let title: object;
     if (data.series.length === 0) {
@@ -155,7 +199,7 @@ export class HashrateChartPoolsComponent implements OnInit {
           color: 'grey',
           fontSize: 15
         },
-        text: `Indexing in progess`,
+        text: $localize`:@@23555386d8af1ff73f297e89dd4af3f4689fb9dd:Indexing blocks`,
         left: 'center',
         top: 'center',
       };
@@ -164,6 +208,7 @@ export class HashrateChartPoolsComponent implements OnInit {
     this.chartOptions = {
       title: title,
       animation: false,
+      color: chartColors.filter(color => color !== '#FDD835'),
       grid: {
         right: this.right,
         left: this.left,
@@ -180,13 +225,13 @@ export class HashrateChartPoolsComponent implements OnInit {
         borderRadius: 4,
         shadowColor: 'rgba(0, 0, 0, 0.5)',
         textStyle: {
-          color: '#b1b1b1',
+          color: 'var(--tooltip-grey)',
           align: 'left',
         },
         borderColor: '#000',
         formatter: function (data) {
           const date = new Date(data[0].data[0]).toLocaleDateString(this.locale, { year: 'numeric', month: 'short', day: 'numeric' });
-          let tooltip = `<b style="color: white; margin-left: 18px">${date}</b><br>`;
+          let tooltip = `<b style="color: white; margin-left: 2px">${date}</b><br>`;
           data.sort((a, b) => b.data[1] - a.data[1]);
           for (const pool of data) {
             if (pool.data[1] > 0) {
@@ -246,6 +291,7 @@ export class HashrateChartPoolsComponent implements OnInit {
         },
       }],
     };
+    this.cd.markForCheck();
   }
 
   onChartInit(ec) {
@@ -262,7 +308,7 @@ export class HashrateChartPoolsComponent implements OnInit {
     const now = new Date();
     // @ts-ignore
     this.chartOptions.grid.bottom = 30;
-    this.chartOptions.backgroundColor = '#11131f';
+    this.chartOptions.backgroundColor = 'var(--active-bg)';
     this.chartInstance.setOption(this.chartOptions);
     download(this.chartInstance.getDataURL({
       pixelRatio: 2,

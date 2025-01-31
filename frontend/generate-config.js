@@ -2,12 +2,16 @@ var fs = require('fs');
 const { spawnSync } = require('child_process');
 
 const CONFIG_FILE_NAME = 'mempool-frontend-config.json';
-const GENERATED_CONFIG_FILE_NAME = 'generated-config.js';
+const GENERATED_CONFIG_FILE_NAME = 'src/resources/config.js';
+const GENERATED_TEMPLATE_CONFIG_FILE_NAME = 'src/resources/config.template.js';
+const GENERATED_CUSTOMIZATION_FILE_NAME = 'src/resources/customize.js';
 
 let settings = [];
 let configContent = {};
 let gitCommitHash = '';
 let packetJsonVersion = '';
+let customConfig;
+let customConfigContent;
 
 try {
   const rawConfig = fs.readFileSync(CONFIG_FILE_NAME);
@@ -21,7 +25,18 @@ try {
   }
 }
 
-const indexFilePath = configContent.BASE_MODULE ? 'src/index.' + configContent.BASE_MODULE + '.html' : 'src/index.mempool.html';
+if (configContent && configContent.CUSTOMIZATION) {
+  try {
+    customConfig = readConfig(configContent.CUSTOMIZATION);
+    customConfigContent = JSON.parse(customConfig);
+  } catch (e) {
+    console.log(`failed to load customization config from ${configContent.CUSTOMIZATION}`);
+  }
+}
+
+const baseModuleName = configContent.BASE_MODULE || 'mempool';
+const customBuildName = (customConfigContent && customConfigContent.enterprise) ? ('.' + customConfigContent.enterprise) : '';
+const indexFilePath = 'src/index.' + baseModuleName + customBuildName + '.html';
 
 try {
   fs.copyFileSync(indexFilePath, 'src/index.html');
@@ -67,10 +82,17 @@ if (process.env.DOCKER_COMMIT_HASH) {
 
 const newConfig = `(function (window) {
   window.__env = window.__env || {};${settings.reduce((str, obj) => `${str}
-    window.__env.${obj.key} = ${ typeof obj.value === 'string' ? `'${obj.value}'` : obj.value };`, '')}
+    window.__env.${obj.key} = ${typeof obj.value === 'string' ? `'${obj.value}'` : obj.value};`, '')}
     window.__env.GIT_COMMIT_HASH = '${gitCommitHash}';
     window.__env.PACKAGE_JSON_VERSION = '${packetJsonVersion}';
-  }(global || this));`;
+  }((typeof global !== 'undefined') ? global : this));`;
+
+const newConfigTemplate = `(function (window) {
+  window.__env = window.__env || {};${settings.reduce((str, obj) => `${str}
+    window.__env.${obj.key} = ${typeof obj.value === 'string' ? `'\${__${obj.key}__}'` : `\${__${obj.key}__}`};`, '')}
+    window.__env.GIT_COMMIT_HASH = '${gitCommitHash}';
+    window.__env.PACKAGE_JSON_VERSION = '${packetJsonVersion}';
+  }(this));`;
 
 function readConfig(path) {
   try {
@@ -89,7 +111,28 @@ function writeConfig(path, config) {
   }
 }
 
+function writeConfigTemplate(path, config) {
+  try {
+    fs.writeFileSync(path, config, 'utf8');
+  } catch (e) {
+    throw new Error(e);
+  }
+}
+
+writeConfigTemplate(GENERATED_TEMPLATE_CONFIG_FILE_NAME, newConfigTemplate);
+
 const currentConfig = readConfig(GENERATED_CONFIG_FILE_NAME);
+
+let customConfigJs = '';
+if (customConfig) {
+  console.log(`Customizing frontend using ${configContent.CUSTOMIZATION}`);
+  customConfigJs = `(function (window) {
+    window.__env = window.__env || {};
+    window.__env.customize = ${customConfig};
+    }((typeof global !== 'undefined') ? global : this));
+  `;
+}
+writeConfig(GENERATED_CUSTOMIZATION_FILE_NAME, customConfigJs);
 
 if (currentConfig && currentConfig === newConfig) {
   console.log(`No configuration updates, skipping ${GENERATED_CONFIG_FILE_NAME} file update`);
@@ -106,4 +149,4 @@ if (currentConfig && currentConfig === newConfig) {
   console.log('NEW CONFIG: ', newConfig);
   writeConfig(GENERATED_CONFIG_FILE_NAME, newConfig);
   console.log(`${GENERATED_CONFIG_FILE_NAME} file updated`);
-};
+}

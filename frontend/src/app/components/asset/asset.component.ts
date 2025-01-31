@@ -1,17 +1,17 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { ActivatedRoute, ParamMap } from '@angular/router';
-import { ElectrsApiService } from '../../services/electrs-api.service';
+import { ElectrsApiService } from '@app/services/electrs-api.service';
 import { switchMap, filter, catchError, take } from 'rxjs/operators';
-import { Asset, Transaction } from '../../interfaces/electrs.interface';
-import { WebsocketService } from 'src/app/services/websocket.service';
-import { StateService } from 'src/app/services/state.service';
-import { AudioService } from 'src/app/services/audio.service';
-import { ApiService } from 'src/app/services/api.service';
+import { Asset, Transaction } from '@interfaces/electrs.interface';
+import { WebsocketService } from '@app/services/websocket.service';
+import { StateService } from '@app/services/state.service';
+import { AudioService } from '@app/services/audio.service';
+import { ApiService } from '@app/services/api.service';
 import { of, merge, Subscription, combineLatest } from 'rxjs';
-import { SeoService } from 'src/app/services/seo.service';
-import { environment } from 'src/environments/environment';
-import { AssetsService } from 'src/app/services/assets.service';
-import { moveDec } from 'src/app/bitcoin.utils';
+import { SeoService } from '@app/services/seo.service';
+import { environment } from '@environments/environment';
+import { AssetsService } from '@app/services/assets.service';
+import { moveDec } from '@app/bitcoin.utils';
 
 @Component({
   selector: 'app-asset',
@@ -86,6 +86,7 @@ export class AssetComponent implements OnInit, OnDestroy {
                   catchError((err) => {
                     this.isLoadingAsset = false;
                     this.error = err;
+                    this.seoService.logSoft404();
                     console.log(err);
                     return of(null);
                   })
@@ -104,6 +105,7 @@ export class AssetComponent implements OnInit, OnDestroy {
           if (!this.assetContract) {
             this.assetContract = [null, '?', 'Unknown', 0];
           }
+          this.seoService.setDescription($localize`:@@meta.description.liquid.asset:Browse an overview of the Liquid asset ${this.assetContract[2]}:INTERPOLATION: (${this.assetContract[1]}:INTERPOLATION:): see issued amount, burned amount, circulating amount, related transactions, and more.`);
           this.blindedIssuance = this.asset.chain_stats.has_blinded_issuances || this.asset.mempool_stats.has_blinded_issuances;
           this.isNativeAsset = asset.asset_id === this.nativeAssetId;
           this.updateChainStats();
@@ -153,6 +155,7 @@ export class AssetComponent implements OnInit, OnDestroy {
       (error) => {
         console.log(error);
         this.error = error;
+        this.seoService.logSoft404();
         this.isLoadingAsset = false;
       });
 

@@ -2,43 +2,39 @@
 
 <div class="full-container">
 
-  <div class="card-header  mb-0 mb-md-4">
-    <span i18n="mining.pools-dominance">Mining pools dominance</span>
-    <button class="btn" style="margin: 0 0 4px 0px" (click)="onSaveChart()">
-      <fa-icon [icon]="['fas', 'download']" [fixedWidth]="true"></fa-icon>
-    </button>
+  <div class="card-header mb-0 mb-md-4">
+    <div class="d-flex d-md-block align-items-baseline">
+      <span i18n="mining.pools-dominance">Pools Dominance</span>
+      <button class="btn p-0 pl-2" style="margin: 0 0 4px 0px" (click)="onSaveChart()">
+        <fa-icon [icon]="['fas', 'download']" [fixedWidth]="true"></fa-icon>
+      </button>
+    </div>  
 
     <form [formGroup]="radioGroupForm" class="formRadioGroup" *ngIf="(hashrateObservable$ | async) as stats">
-      <div class="btn-group btn-group-toggle" ngbRadioGroup name="radioBasic" formControlName="dateSpan">
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount >= 4320">
-          <input ngbButton type="radio" [value]="'1m'" fragment="1m"> 1M
+      <div class="btn-group btn-group-toggle" name="radioBasic">
+        <label class="btn btn-primary btn-sm" *ngIf="stats.blockCount >= 25920" [class.active]="radioGroupForm.get('dateSpan').value === '6m'">
+          <input type="radio" [value]="'6m'" fragment="6m" [routerLink]="['/graphs/mining/pools-dominance' | relativeUrl]" [attr.data-cy]="'6m'" formControlName="dateSpan"> 6M
         </label>
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount >= 12960">
-          <input ngbButton type="radio" [value]="'3m'" fragment="3m"> 3M
+        <label class="btn btn-primary btn-sm" *ngIf="stats.blockCount >= 52560" [class.active]="radioGroupForm.get('dateSpan').value === '1y'">
+          <input type="radio" [value]="'1y'" fragment="1y" [routerLink]="['/graphs/mining/pools-dominance' | relativeUrl]" [attr.data-cy]="'1y'" formControlName="dateSpan"> 1Y
         </label>
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount >= 25920">
-          <input ngbButton type="radio" [value]="'6m'" fragment="6m"> 6M
+        <label class="btn btn-primary btn-sm" *ngIf="stats.blockCount >= 105120" [class.active]="radioGroupForm.get('dateSpan').value === '2y'">
+          <input type="radio" [value]="'2y'" fragment="2y" [routerLink]="['/graphs/mining/pools-dominance' | relativeUrl]" [attr.data-cy]="'2y'" formControlName="dateSpan"> 2Y
         </label>
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount >= 52560">
-          <input ngbButton type="radio" [value]="'1y'" fragment="1y"> 1Y
+        <label class="btn btn-primary btn-sm" *ngIf="stats.blockCount >= 157680" [class.active]="radioGroupForm.get('dateSpan').value === '3y'">
+          <input type="radio" [value]="'3y'" fragment="3y" [routerLink]="['/graphs/mining/pools-dominance' | relativeUrl]" [attr.data-cy]="'3y'" formControlName="dateSpan"> 3Y
         </label>
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount >= 105120">
-          <input ngbButton type="radio" [value]="'2y'" fragment="2y"> 2Y
-        </label>
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount >= 157680">
-          <input ngbButton type="radio" [value]="'3y'" fragment="3y"> 3Y
-        </label>
-        <label ngbButtonLabel class="btn-primary btn-sm" *ngIf="stats.blockCount > 157680">
-          <input ngbButton type="radio" [value]="'all'" fragment="all"> ALL
+        <label class="btn btn-primary btn-sm" [class.active]="radioGroupForm.get('dateSpan').value === 'all'">
+          <input type="radio" [value]="'all'" fragment="all" [routerLink]="['/graphs/mining/pools-dominance' | relativeUrl]" [attr.data-cy]="'all'" formControlName="dateSpan"> ALL
         </label>
       </div>
     </form>
   </div>
 
-  <div class="chart" echarts [initOpts]="chartInitOptions" [options]="chartOptions"
-    (chartInit)="onChartInit($event)">
+  <div class="chart" *browserOnly echarts [initOpts]="chartInitOptions" [options]="chartOptions"
+    (chartInit)="onChartInit($event)" [style]="{opacity: isLoading ? 0.5 : 1}">
   </div>
-  <div class="text-center loadingGraphs" *ngIf="isLoading">
+  <div class="text-center loadingGraphs" *ngIf="!stateService.isBrowser || isLoading">
     <div class="spinner-border text-light"></div>
   </div>
 

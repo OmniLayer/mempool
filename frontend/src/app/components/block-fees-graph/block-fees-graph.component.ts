@@ -1,14 +1,18 @@
 import { ChangeDetectionStrategy, Component, Inject, Input, LOCALE_ID, OnInit } from '@angular/core';
-import { EChartsOption, graphic } from 'echarts';
+import { echarts, EChartsOption } from '@app/graphs/echarts';
 import { Observable } from 'rxjs';
 import { map, share, startWith, switchMap, tap } from 'rxjs/operators';
-import { ApiService } from 'src/app/services/api.service';
-import { SeoService } from 'src/app/services/seo.service';
+import { ApiService } from '@app/services/api.service';
+import { SeoService } from '@app/services/seo.service';
 import { formatNumber } from '@angular/common';
-import { FormBuilder, FormGroup } from '@angular/forms';
-import { download, formatterXAxisLabel } from 'src/app/shared/graphs.utils';
-import { StorageService } from 'src/app/services/storage.service';
-import { MiningService } from 'src/app/services/mining.service';
+import { UntypedFormBuilder, UntypedFormGroup } from '@angular/forms';
+import { download, formatterXAxis } from '@app/shared/graphs.utils';
+import { StorageService } from '@app/services/storage.service';
+import { MiningService } from '@app/services/mining.service';
+import { ActivatedRoute } from '@angular/router';
+import { FiatShortenerPipe } from '@app/shared/pipes/fiat-shortener.pipe';
+import { FiatCurrencyPipe } from '@app/shared/pipes/fiat-currency.pipe';
+import { StateService } from '@app/services/state.service';
 
 @Component({
   selector: 'app-block-fees-graph',
@@ -19,7 +23,7 @@ import { MiningService } from 'src/app/services/mining.service';
       position: absolute;
       top: 50%;
       left: calc(50% - 15px);
-      z-index: 100;
+      z-index: 99;
     }
   `],
   changeDetection: ChangeDetectionStrategy.OnPush,
@@ -29,7 +33,7 @@ export class BlockFeesGraphComponent implements OnInit {
   @Input() left: number | string = 75;
 
   miningWindowPreference: string;
-  radioGroupForm: FormGroup;
+  radioGroupForm: UntypedFormGroup;
 
   chartOptions: EChartsOption = {};
   chartInitOptions = {
@@ -42,28 +46,45 @@ export class BlockFeesGraphComponent implements OnInit {
   timespan = '';
   chartInstance: any = undefined;
 
+  currency: string;
+
   constructor(
     @Inject(LOCALE_ID) public locale: string,
     private seoService: SeoService,
     private apiService: ApiService,
-    private formBuilder: FormBuilder,
+    private formBuilder: UntypedFormBuilder,
     private storageService: StorageService,
-    private miningService: MiningService
+    private miningService: MiningService,
+    public stateService: StateService,
+    private route: ActivatedRoute,
+    private fiatShortenerPipe: FiatShortenerPipe,
+    private fiatCurrencyPipe: FiatCurrencyPipe,
   ) {
     this.radioGroupForm = this.formBuilder.group({ dateSpan: '1y' });
     this.radioGroupForm.controls.dateSpan.setValue('1y');
+    this.currency = 'USD';
   }
 
   ngOnInit(): void {
-    this.seoService.setTitle($localize`:@@mining.block-fees:Block Fees`);
-    this.miningWindowPreference = this.miningService.getDefaultTimespan('24h');
+    this.seoService.setTitle($localize`:@@6c453b11fd7bd159ae30bc381f367bc736d86909:Block Fees`);
+    this.seoService.setDescription($localize`:@@meta.description.bitcoin.graphs.block-fees:See the average mining fees earned per Bitcoin block visualized in BTC and USD over time.`);
+    this.miningWindowPreference = this.miningService.getDefaultTimespan('1m');
     this.radioGroupForm = this.formBuilder.group({ dateSpan: this.miningWindowPreference });
     this.radioGroupForm.controls.dateSpan.setValue(this.miningWindowPreference);
 
+    this.route
+      .fragment
+      .subscribe((fragment) => {
+        if (['1m', '3m', '6m', '1y', '2y', '3y', 'all'].indexOf(fragment) > -1) {
+          this.radioGroupForm.controls.dateSpan.setValue(fragment, { emitEvent: false });
+        }
+      });
+
     this.statsObservable$ = this.radioGroupForm.get('dateSpan').valueChanges
       .pipe(
-        startWith(this.miningWindowPreference),
+        startWith(this.radioGroupForm.controls.dateSpan.value),
         switchMap((timespan) => {
+          this.isLoading = true;
           this.storageService.setValue('miningWindowPreference', timespan);
           this.timespan = timespan;
           this.isLoading = true;
@@ -71,7 +92,8 @@ export class BlockFeesGraphComponent implements OnInit {
             .pipe(
               tap((response) => {
                 this.prepareChartOptions({
-                  blockFees: response.body.map(val => [val.timestamp * 1000, val.avg_fees / 100000000]),
+                  blockFees: response.body.map(val => [val.timestamp * 1000, val.avgFees / 100000000, val.avgHeight]),
+                  blockFeesFiat: response.body.filter(val => val[this.currency] > 0).map(val => [val.timestamp * 1000, val.avgFees / 100000000 * val[this.currency], val.avgHeight]),
                 });
                 this.isLoading = false;
               }),
@@ -87,17 +109,32 @@ export class BlockFeesGraphComponent implements OnInit {
   }
 
   prepareChartOptions(data) {
+    let title: object;
+    if (data.blockFees.length === 0) {
+      title = {
+        textStyle: {
+          color: 'grey',
+          fontSize: 15
+        },
+        text: $localize`:@@23555386d8af1ff73f297e89dd4af3f4689fb9dd:Indexing blocks`,
+        left: 'center',
+        top: 'center'
+      };
+    }
+
     this.chartOptions = {
-      animation: false,
+      title: title,
       color: [
-        new graphic.LinearGradient(0, 0, 0, 0.65, [
-          { offset: 0, color: '#F4511E' },
-          { offset: 0.25, color: '#FB8C00' },
-          { offset: 0.5, color: '#FFB300' },
-          { offset: 0.75, color: '#FDD835' },
-          { offset: 1, color: '#7CB342' }
+        new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: '#FDD835' },
+          { offset: 1, color: '#FB8C00' },
+        ]),
+        new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+          { offset: 0, color: '#C0CA33' },
+          { offset: 1, color: '#1B5E20' },
         ]),
       ],
+      animation: false,
       grid: {
         top: 30,
         bottom: 80,
@@ -114,29 +151,58 @@ export class BlockFeesGraphComponent implements OnInit {
         borderRadius: 4,
         shadowColor: 'rgba(0, 0, 0, 0.5)',
         textStyle: {
-          color: '#b1b1b1',
+          color: 'var(--tooltip-grey)',
           align: 'left',
         },
         borderColor: '#000',
-        formatter: (ticks) => {
-          const tick = ticks[0];
-          const feesString = `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.3-3')} BTC`;
-          return `
-            <b style="color: white; margin-left: 18px">${tick.axisValueLabel}</b><br>
-            <span>${feesString}</span>
-          `;
-        }
+        formatter: function (data) {
+          if (data.length <= 0) {
+            return '';
+          }
+          let tooltip = `<b style="color: white; margin-left: 2px">
+            ${formatterXAxis(this.locale, this.timespan, parseInt(data[0].axisValue, 10))}</b><br>`;
+
+          for (const tick of data) {
+            if (tick.seriesIndex === 0) {
+              tooltip += `${tick.marker} ${tick.seriesName}: ${formatNumber(tick.data[1], this.locale, '1.3-3')} BTC<br>`;
+            } else if (tick.seriesIndex === 1) {
+              tooltip += `${tick.marker} ${tick.seriesName}: ${this.fiatCurrencyPipe.transform(tick.data[1], null, this.currency) }<br>`;
+            }
+          }
+
+          tooltip += `<small>* On average around block ${data[0].data[2]}</small>`;
+          return tooltip;
+        }.bind(this)
       },
-      xAxis: {
-        name: formatterXAxisLabel(this.locale, this.timespan),
-        nameLocation: 'middle',
-        nameTextStyle: {
-          padding: [10, 0, 0, 0],
-        },
+      xAxis: data.blockFees.length === 0 ? undefined :
+      {
         type: 'time',
         splitNumber: this.isMobile() ? 5 : 10,
+        axisLabel: {
+          hideOverlap: true,
+        }
       },
-      yAxis: [
+      legend: data.blockFees.length === 0 ? undefined : {
+        data: [
+          {
+            name: 'Fees BTC',
+            inactiveColor: 'rgb(110, 112, 121)',
+            textStyle: {
+              color: 'white',
+            },
+            icon: 'roundRect',
+          },
+          {
+            name: 'Fees ' + this.currency,
+            inactiveColor: 'rgb(110, 112, 121)',
+            textStyle: {
+              color: 'white',
+            },
+            icon: 'roundRect',
+          },
+        ],
+      },
+      yAxis: data.blockFees.length === 0 ? undefined : [
         {
           type: 'value',
           axisLabel: {
@@ -148,26 +214,56 @@ export class BlockFeesGraphComponent implements OnInit {
           splitLine: {
             lineStyle: {
               type: 'dotted',
-              color: '#ffffff66',
+              color: 'var(--transparent-fg)',
               opacity: 0.25,
             }
           },
         },
-      ],
-      series: [
         {
-          zlevel: 0,
-          name: 'Fees',
-          showSymbol: false,
-          symbol: 'none',
-          data: data.blockFees,
-          type: 'line',
-          lineStyle: {
-            width: 2,
+          type: 'value',
+          position: 'right',
+          axisLabel: {
+            color: 'rgb(110, 112, 121)',
+            formatter: function(val) {
+              return this.fiatShortenerPipe.transform(val, null, this.currency);
+            }.bind(this)
+          },
+          splitLine: {
+            show: false,
           },
         },
       ],
-      dataZoom: [{
+      series: data.blockFees.length === 0 ? undefined : [
+        {
+          legendHoverLink: false,
+          zlevel: 0,
+          yAxisIndex: 0,
+          name: 'Fees BTC',
+          data: data.blockFees,
+          type: 'line',
+          smooth: 0.25,
+          symbol: 'none',
+          lineStyle: {
+            width: 1,
+            opacity: 1,
+          }
+        },
+        {
+          legendHoverLink: false,
+          zlevel: 1,
+          yAxisIndex: 1,
+          name: 'Fees ' + this.currency,
+          data: data.blockFeesFiat,
+          type: 'line',
+          smooth: 0.25,
+          symbol: 'none',
+          lineStyle: {
+            width: 2,
+            opacity: 1,
+          }
+        },
+      ],
+      dataZoom: data.blockFees.length === 0 ? undefined : [{
         type: 'inside',
         realtime: true,
         zoomLock: true,
@@ -209,7 +305,7 @@ export class BlockFeesGraphComponent implements OnInit {
     const now = new Date();
     // @ts-ignore
     this.chartOptions.grid.bottom = 40;
-    this.chartOptions.backgroundColor = '#11131f';
+    this.chartOptions.backgroundColor = 'var(--active-bg)';
     this.chartInstance.setOption(this.chartOptions);
     download(this.chartInstance.getDataURL({
       pixelRatio: 2,

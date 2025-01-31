@@ -1,185 +1,123 @@
 <div class="container-xl">
 
   <div class="title-block">
-    <div *ngIf="rbfTransaction" class="alert alert-mempool" role="alert">
+    <div *ngIf="rbfTransaction && !tx?.status?.confirmed" class="alert alert-mempool" role="alert">
       <span i18n="transaction.rbf.replacement|RBF replacement">This transaction has been replaced by:</span>
-      <a class="alert-link" [routerLink]="['/tx/' | relativeUrl, rbfTransaction.txid]" [state]="{ data: rbfTransaction.size ? rbfTransaction : null }">
-        <span class="d-inline d-lg-none">{{ rbfTransaction.txid | shortenString : 24 }}</span>
-        <span class="d-none d-lg-inline">{{ rbfTransaction.txid }}</span>
-      </a>
+      <app-truncate [text]="rbfTransaction.txid" [lastChars]="12" [link]="['/tx/' | relativeUrl, rbfTransaction.txid]"></app-truncate>
     </div>
 
-    <ng-container *ngIf="!rbfTransaction || rbfTransaction?.size">
+    <ng-container *ngIf="!rbfTransaction || rbfTransaction?.size || tx">
       <h1 i18n="shared.transaction">Transaction</h1>
 
-      <span class="tx-link float-left">
-        <a [routerLink]="['/tx/' | relativeUrl, txId]">
-          <span class="d-inline d-lg-none">{{ txId | shortenString : 24 }}</span>
-          <span class="d-none d-lg-inline">{{ txId }}</span>
-        </a>
-        <app-clipboard [text]="txId"></app-clipboard>
+      <span class="tx-link">
+        <span class="txid">
+          <app-truncate [text]="txId" [lastChars]="12" [link]="['/tx/' | relativeUrl, txId]">
+            <app-clipboard [text]="txId"></app-clipboard>
+          </app-truncate>
+        </span>
       </span>
 
       <div class="container-buttons">
-        <ng-template [ngIf]="tx?.status?.confirmed">
-          <button *ngIf="latestBlock" type="button" class="btn btn-sm btn-success">
-            <ng-container *ngTemplateOutlet="latestBlock.height - tx.status.block_height + 1 == 1 ? confirmationSingular : confirmationPlural; context: {$implicit: latestBlock.height - tx.status.block_height + 1}"></ng-container>
-            <ng-template #confirmationSingular let-i i18n="shared.confirmation-count.singular|Transaction singular confirmation count">{{ i }} confirmation</ng-template>
-            <ng-template #confirmationPlural let-i i18n="shared.confirmation-count.plural|Transaction plural confirmation count">{{ i }} confirmations</ng-template>
-          </button>
-        </ng-template>
-        <ng-template [ngIf]="tx && !tx?.status.confirmed">
-          <button type="button" class="btn btn-sm btn-danger" i18n="transaction.unconfirmed|Transaction unconfirmed state">Unconfirmed</button>
-        </ng-template>
+        <app-confirmations
+          *ngIf="tx"
+          [chainTip]="latestBlock?.height"
+          [height]="tx?.status?.block_height"
+          [replaced]="replaced"
+          [removed]="this.rbfInfo?.mined && !this.tx?.status?.confirmed"
+          [cached]="isCached"
+        ></app-confirmations>
       </div>
     </ng-container>
   </div>
   <div class="clearfix"></div>
 
+  @if (!error) {
+    <app-transaction-details
+      [network]="network"
+      [tx]="tx"
+      [isLoadingTx]="isLoadingTx"
+      [isMobile]="isMobile"
+      [transactionTime]="transactionTime"
+      [isLoadingFirstSeen]="isLoadingFirstSeen"
+      [featuresEnabled]="featuresEnabled"
+      [auditStatus]="auditStatus"
+      [filters]="filters"
+      [miningStats]="miningStats"
+      [pool]="pool"
+      [isAcceleration]="isAcceleration"
+      [acceleratorAvailable]="acceleratorAvailable"
+      [accelerateCtaType]="accelerateCtaType"
+      [notAcceleratedOnLoad]="notAcceleratedOnLoad"
+      [showAccelerationSummary]="showAccelerationSummary"
+      [eligibleForAcceleration]="eligibleForAcceleration"
+      [hasEffectiveFeeRate]="hasEffectiveFeeRate"
+      [cpfpInfo]="cpfpInfo"
+      [hasCpfp]="hasCpfp"
+      [accelerationInfo]="accelerationInfo"
+      [replaced]="replaced"
+      [isCached]="isCached"
+      [ETA$]="ETA$"
+      (accelerateClicked)="onAccelerateClicked()"
+      (toggleCpfp$)="this.showCpfpDetails = !this.showCpfpDetails"
+    ></app-transaction-details>
+  }
+
+  <span id="accelerate"></span>
+
   <ng-template [ngIf]="!isLoadingTx && !error">
 
-    <ng-template [ngIf]="tx.status.confirmed" [ngIfElse]="unconfirmedTemplate">
-
-      <div class="box">
-        <div class="row">
-          <div class="col-sm">
-            <table class="table table-borderless table-striped">
-              <tbody>
-                <tr>
-                  <td i18n="transaction.timestamp|Transaction Timestamp">Timestamp</td>
-                  <td>
-                    &lrm;{{ tx.status.block_time * 1000 | date:'yyyy-MM-dd HH:mm' }}
-                    <div class="lg-inline">
-                      <i class="symbol">(<app-time-since [time]="tx.status.block_time" [fastRender]="true"></app-time-since>)</i>
-                    </div>
-                  </td>
-                </tr>
-                <tr *ngIf="latestBlock && tx.status.block_height <= latestBlock.height - 8">
-                  <td class="td-width" i18n="transaction.included-in-block|Transaction included in block">Included in block</td>
-                  <td>
-                    <a [routerLink]="['/block/' | relativeUrl, tx.status.block_hash]" [state]="{ data: { blockHeight: tx.status.block_height } }">{{ tx.status.block_height }}</a>
-                  </td>
-                </tr>
-                <ng-template [ngIf]="transactionTime > 0">
-                  <tr>
-                    <td i18n="transaction.confirmed|Transaction Confirmed state">Confirmed</td>
-                    <td><app-time-span [time]="tx.status.block_time - transactionTime" [fastRender]="true"></app-time-span></td>
-                  </tr>
-                </ng-template>
-                <tr *ngIf="network !== 'liquid' && network !== 'liquidtestnet'">
-                  <td class="td-width" i18n="transaction.features|Transaction features">Features</td>
-                  <td>
-                    <app-tx-features [tx]="tx"></app-tx-features>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="col-sm">
-            <ng-container *ngTemplateOutlet="feeTable"></ng-container>
-          </div>
-
-        </div>
-      </div>
-
-    </ng-template>
-
-    <ng-template #unconfirmedTemplate>
-
-      <div class="box">
-        <div class="row">
-          <div class="col-sm">
-            <table class="table table-borderless table-striped">
-              <tbody>
-                <ng-template [ngIf]="transactionTime !== 0">
-                  <tr *ngIf="transactionTime === -1; else firstSeenTmpl">
-                    <td><span class="skeleton-loader"></span></td>
-                    <td><span class="skeleton-loader"></span></td>
-                  </tr>
-                  <ng-template #firstSeenTmpl>
-                    <tr>
-                      <td i18n="transaction.first-seen|Transaction first seen">First seen</td>
-                      <td><i><app-time-since [time]="transactionTime" [fastRender]="true"></app-time-since></i></td>
-                    </tr>
-                  </ng-template>
-                </ng-template>
-                <tr>
-                  <td class="td-width" i18n="transaction.eta|Transaction ETA">ETA</td>
-                  <td>
-                    <ng-template [ngIf]="txInBlockIndex === undefined" [ngIfElse]="estimationTmpl">
-                      <span class="skeleton-loader"></span>
-                    </ng-template>
-                    <ng-template #estimationTmpl>
-                      <ng-template [ngIf]="txInBlockIndex >= 7" [ngIfElse]="belowBlockLimit">
-                        <span i18n="transaction.eta.in-several-hours|Transaction ETA in several hours or more">In several hours (or more)</span>
-                      </ng-template>
-                      <ng-template #belowBlockLimit>
-                        <ng-template [ngIf]="network === 'liquid' || network === 'liquidtestnet'" [ngIfElse]="timeEstimateDefault">
-                          <app-time-until [time]="(60 * 1000 * txInBlockIndex) + now" [fastRender]="false" [fixedRender]="true"></app-time-until>
-                        </ng-template>
-                        <ng-template #timeEstimateDefault>
-                          <app-time-until *ngIf="(timeAvg$ | async) as timeAvg;" [time]="(timeAvg * txInBlockIndex) + now + timeAvg" [fastRender]="false" [fixedRender]="true" [forceFloorOnTimeIntervals]="['hour']"></app-time-until>
-                        </ng-template>
-                      </ng-template>
-                    </ng-template>
-                  </td>
-                </tr>
-                <tr *ngIf="network !== 'liquid' && network !== 'liquidtestnet'">
-                  <td class="td-width" i18n="transaction.features|Transaction Features">Features</td>
-                  <td>
-                    <app-tx-features [tx]="tx"></app-tx-features>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="col-sm">
-            <ng-container *ngTemplateOutlet="feeTable"></ng-container>
-          </div>
-        </div>
-      </div>
-    </ng-template>
-
+    <!-- CPFP Details -->
     <ng-template [ngIf]="showCpfpDetails">
       <br>
-
-      <h2 class="text-left">CPFP <fa-icon [icon]="['fas', 'info-circle']" [fixedWidth]="true" size="xs"></fa-icon></h2>
-      <div class="box">
-        <table class="table table-borderless table-striped">
+      <div class="title">
+        <h2 class="text-left" i18n="transaction.related-transactions|CPFP List">Related Transactions</h2>
+      </div>
+      <div class="box cpfp-details">
+        <table class="table table-fixed table-borderless table-striped">
           <thead>
             <tr>
               <th i18n="transactions-list.vout.scriptpubkey-type">Type</th>
-              <th i18n="dashboard.latest-transactions.txid">TXID</th>
-              <th class="d-none d-lg-table-cell" i18n="transaction.vsize|Transaction Virtual Size">Virtual size</th>
+              <th class="txids" i18n="dashboard.latest-transactions.txid">TXID</th>
+              <th *only-vsize class="d-none d-lg-table-cell" i18n="transaction.vsize|Transaction Virtual Size">Virtual size</th>
+              <th *only-weight class="d-none d-lg-table-cell" i18n="transaction.weight|Transaction Weight">Weight</th>
               <th i18n="transaction.fee-rate|Transaction fee rate">Fee rate</th>
               <th class="d-none d-lg-table-cell"></th>
             </tr>
           </thead>
           <tbody>
-            <ng-template [ngIf]="cpfpInfo.bestDescendant">
+            <ng-template [ngIf]="cpfpInfo?.descendants?.length">
+              <tr *ngFor="let cpfpTx of cpfpInfo.descendants">
+                <td><span class="badge badge-primary" i18n="transaction.descendant|Descendant">Descendant</span></td>
+                <td>
+                  <app-truncate [text]="cpfpTx.txid" [link]="['/tx' | relativeUrl, cpfpTx.txid]"></app-truncate>
+                </td>
+                <td *only-vsize class="d-none d-lg-table-cell" [innerHTML]="cpfpTx.weight / 4 | vbytes: 2"></td>
+                <td *only-weight class="d-none d-lg-table-cell" [innerHTML]="cpfpTx.weight | wuBytes: 2"></td>
+                <td><app-fee-rate [fee]="cpfpTx.fee" [weight]="cpfpTx.weight"></app-fee-rate></td>
+                <td class="d-none d-lg-table-cell"><fa-icon  *ngIf="roundToOneDecimal(cpfpTx) > roundToOneDecimal(tx)"  class="arrow-green" [icon]="['fas', 'angle-double-up']" [fixedWidth]="true"></fa-icon></td>
+              </tr>
+            </ng-template>
+            <ng-template [ngIf]="cpfpInfo?.bestDescendant">
               <tr>
                 <td><span class="badge badge-success" i18n="transaction.descendant|Descendant">Descendant</span></td>
-                <td>
-                  <a [routerLink]="['/tx' | relativeUrl, cpfpInfo.bestDescendant.txid]">
-                    <span class="d-inline d-lg-none">{{ cpfpInfo.bestDescendant.txid | shortenString : 8 }}</span>
-                    <span class="d-none d-lg-inline">{{ cpfpInfo.bestDescendant.txid }}</span>
-                  </a>
+                <td class="txids">
+                  <app-truncate [text]="cpfpInfo.bestDescendant.txid" [link]="['/tx' | relativeUrl, cpfpInfo.bestDescendant.txid]"></app-truncate>
                 </td>
-                <td class="d-none d-lg-table-cell" [innerHTML]="cpfpInfo.bestDescendant.weight / 4 | vbytes: 2"></td>
-                <td>{{ cpfpInfo.bestDescendant.fee / (cpfpInfo.bestDescendant.weight / 4) | feeRounding }} <span class="symbol" i18n="shared.sat-vbyte|sat/vB">sat/vB</span></td>
+                <td *only-vsize class="d-none d-lg-table-cell" [innerHTML]="cpfpInfo.bestDescendant.weight / 4 | vbytes: 2"></td>
+                <td *only-weight class="d-none d-lg-table-cell" [innerHTML]="cpfpInfo.bestDescendant.weight | wuBytes: 2"></td>
+                <td><app-fee-rate [fee]="cpfpInfo.bestDescendant.fee" [weight]="cpfpInfo.bestDescendant.weight"></app-fee-rate></td>
                 <td class="d-none d-lg-table-cell"><fa-icon class="arrow-green" [icon]="['fas', 'angle-double-up']" [fixedWidth]="true"></fa-icon></td>
               </tr>
             </ng-template>
-            <ng-template [ngIf]="cpfpInfo.ancestors.length">
+            <ng-template [ngIf]="cpfpInfo?.ancestors?.length">
               <tr *ngFor="let cpfpTx of cpfpInfo.ancestors">
                 <td><span class="badge badge-primary" i18n="transaction.ancestor|Transaction Ancestor">Ancestor</span></td>
-                  <td><a [routerLink]="['/tx' | relativeUrl, cpfpTx.txid]">
-                    <span class="d-inline d-lg-none">{{ cpfpTx.txid | shortenString : 8 }}</span>
-                    <span class="d-none d-lg-inline">{{ cpfpTx.txid }}</span>
-                  </a>
+                <td class="txids">
+                  <app-truncate [text]="cpfpTx.txid" [link]="['/tx' | relativeUrl, cpfpTx.txid]"></app-truncate>
                 </td>
-                <td class="d-none d-lg-table-cell" [innerHTML]="cpfpTx.weight / 4 | vbytes: 2"></td>
-                <td>{{ cpfpTx.fee / (cpfpTx.weight / 4) | feeRounding }} <span class="symbol" i18n="shared.sat-vbyte|sat/vB">sat/vB</span></td>
+                <td *only-vsize class="d-none d-lg-table-cell" [innerHTML]="cpfpTx.weight / 4 | vbytes: 2"></td>
+                <td *only-weight class="d-none d-lg-table-cell" [innerHTML]="cpfpTx.weight | wuBytes: 2"></td>
+                <td><app-fee-rate [fee]="cpfpTx.fee" [weight]="cpfpTx.weight"></app-fee-rate></td>
                 <td class="d-none d-lg-table-cell"><fa-icon *ngIf="roundToOneDecimal(cpfpTx) < roundToOneDecimal(tx)" class="arrow-red" [icon]="['fas', 'angle-double-down']" [fixedWidth]="true"></fa-icon></td>
               </tr>
             </ng-template>
@@ -188,20 +126,112 @@
       </div>
     </ng-template>
 
+    <!-- Accelerator -->
+    <ng-container *ngIf="!tx?.status?.confirmed && showAccelerationSummary && (ETA$ | async) as eta;">
+      <br>
+      <div class="title float-left mb-1">
+        <h2><a [href]="[ isMempoolSpaceBuild ? '/accelerator' : 'https://mempool.space/accelerator']" [target]="isMempoolSpaceBuild ? '' : 'blank'"><app-svg-images name="accelerator" [height]="isMobile ? '35px' : '45px'"></app-svg-images></a></h2>
+      </div>
+      <button type="button" class="btn btn-outline-info accelerator-toggle btn-sm float-right" [class.hide-on-mobile]="hasAccelerationDetails" (click)="closeAccelerator()" i18n="accelerator.hide">Hide accelerator</button>
+      <button *ngIf="hasAccelerationDetails" class="btn btn-sm btn-outline-info details-button float-right ml-2" (click)="showAccelerationDetails = !showAccelerationDetails" i18n="transaction.details|Transaction Details">Details</button>
+
+      <div class="clearfix"></div>
+
+      <app-accelerate-checkout
+        *ngIf="(da$ | async) as da;"
+        [advancedEnabled]="true"
+        [tx]="tx"
+        [accelerating]="isAcceleration"
+        [eta]="eta"
+        [miningStats]="miningStats"
+        [scrollEvent]="scrollIntoAccelPreview"
+        [showDetails]="showAccelerationDetails"
+        [noCTA]="true"
+        (hasDetails)="setHasAccelerationDetails($event)"
+        (completed)="onAccelerationCompleted()"
+        (unavailable)="eligibleForAcceleration = false"
+        class="h-100 w-100"
+      ></app-accelerate-checkout>
+    </ng-container>
+
     <br>
 
-    <div class="title float-left">
-      <h2 i18n="transaction.inputs-and-outputs|Transaction inputs and outputs">Inputs & Outputs</h2>
+    <ng-container *ngIf="rbfInfo">
+      <div class="title float-left">
+        <h2 id="rbf" i18n="transaction.rbf-history|RBF Timeline">RBF Timeline</h2>
+      </div>
+      <div class="clearfix"></div>
+      <app-rbf-timeline [txid]="txId" [replacements]="rbfInfo"></app-rbf-timeline>
+      <br>
+    </ng-container>
+
+    <ng-container *ngIf="transactionTime > 0 && tx.acceleratedAt > 0 && (isAcceleration || accelerationCanceled)">
+      <div class="title float-left">
+        <h2 id="acceleration-timeline" i18n="transaction.acceleration-timeline|Acceleration Timeline">Acceleration Timeline</h2>
+      </div>
+      <div class="clearfix"></div>
+      <app-acceleration-timeline [transactionTime]="transactionTime" [acceleratedAt]="tx.acceleratedAt" [tx]="tx" [accelerationInfo]="accelerationInfo" [eta]="(ETA$ | async)" [canceled]="accelerationCanceled"></app-acceleration-timeline>
+      <br>
+    </ng-container>
+
+    <ng-container *ngIf="flowEnabled; else flowPlaceholder">
+      <div class="title float-left">
+        <h2 id="flow" i18n="transaction.flow|Transaction flow">Flow</h2>
+      </div>
+
+      <button type="button" class="btn btn-outline-info flow-toggle btn-sm float-right" (click)="toggleGraph()" i18n="hide-diagram">Hide diagram</button>
+
+      <div class="clearfix"></div>
+
+      <div class="box">
+        <div class="graph-container" #graphContainer>
+          <tx-bowtie-graph
+            [tx]="tx"
+            [cached]="isCached"
+            [width]="graphWidth"
+            [height]="graphHeight"
+            [lineLimit]="inOutLimit"
+            [maxStrands]="graphExpanded ? maxInOut : 24"
+            [network]="network"
+            [tooltip]="true"
+            [connectors]="true"
+            [inputIndex]="inputIndex" [outputIndex]="outputIndex"
+          >
+          </tx-bowtie-graph>
+        </div>
+        <div class="toggle-wrapper" *ngIf="maxInOut > 24">
+          <button class="btn btn-sm btn-primary graph-toggle" (click)="expandGraph();" *ngIf="!graphExpanded; else collapseBtn"><span i18n="show-more">Show more</span></button>
+          <ng-template #collapseBtn>
+            <button class="btn btn-sm btn-primary graph-toggle" (click)="collapseGraph();"><span i18n="show-less">Show less</span></button>
+          </ng-template>
+        </div>
+      </div>
+
+      <br>
+    </ng-container>
+    <ng-template #flowPlaceholder>
+      <div class="box hidden">
+        <div class="graph-container" #graphContainer>
+        </div>
+      </div>
+    </ng-template>
+
+    <div class="subtitle-block">
+      <div class="title">
+        <h2 i18n="transaction.inputs-and-outputs|Transaction inputs and outputs">Inputs & Outputs</h2>
+      </div>
+
+      <div class="title-buttons">
+        <button *ngIf="!flowEnabled" type="button" class="btn btn-outline-info flow-toggle btn-sm" (click)="toggleGraph()" i18n="show-diagram">Show diagram</button>
+        <button type="button" class="btn btn-outline-info btn-sm" (click)="txList.toggleDetails()" i18n="transaction.details|Transaction Details">Details</button>
+      </div>
     </div>
 
-    <button type="button" class="btn btn-outline-info details-button btn-sm float-right" (click)="txList.toggleDetails()" i18n="transaction.details|Transaction Details">Details</button>
 
-    <div class="clearfix"></div>
-
-    <app-transactions-list #txList [transactions]="[tx]" [errorUnblinded]="errorUnblinded" [outputIndex]="outputIndex" [transactionPage]="true"></app-transactions-list>
+    <app-transactions-list #txList [transactions]="[tx]" [cached]="isCached" [errorUnblinded]="errorUnblinded" [inputIndex]="inputIndex" [outputIndex]="outputIndex" [transactionPage]="true"></app-transactions-list>
 
     <div class="title text-left">
-      <h2 i18n="transaction.details">Details</h2>
+      <h2 i18n="transaction.details|Transaction Details">Details</h2>
     </div>
     <div class="box">
       <div class="row">
@@ -209,15 +239,23 @@
           <table class="table table-borderless table-striped">
             <tbody>
               <tr>
-                <td i18n="transaction.size|Transaction Size">Size</td>
+                <td i18n="block.size">Size</td>
                 <td [innerHTML]="'&lrm;' + (tx.size | bytes: 2)"></td>
               </tr>
               <tr>
                 <td i18n="transaction.vsize|Transaction Virtual Size">Virtual size</td>
                 <td [innerHTML]="'&lrm;' + (tx.weight / 4 | vbytes: 2)"></td>
               </tr>
+              <tr *ngIf="adjustedVsize != null">
+                <td><ng-container i18n="transaction.adjusted-vsize|Transaction Adjusted VSize">Adjusted vsize</ng-container>
+                  <a class="info-link" [routerLink]="['/docs/faq/' | relativeUrl]" fragment="what-is-adjusted-vsize">
+                    <fa-icon [icon]="['fas', 'info-circle']" [fixedWidth]="true"></fa-icon>
+                  </a>
+                </td>
+                <td [innerHTML]="'&lrm;' + (adjustedVsize | vbytes: 2)"></td>
+              </tr>
               <tr>
-                <td i18n="transaction.weight|Transaction Weight">Weight</td>
+                <td i18n="block.weight">Weight</td>
                 <td [innerHTML]="'&lrm;' + (tx.weight | wuBytes: 2)"></td>
               </tr>
             </tbody>
@@ -234,8 +272,16 @@
                 <td i18n="transaction.locktime">Locktime</td>
                 <td [innerHTML]="'&lrm;' + (tx.locktime | number)"></td>
               </tr>
+              <tr *ngIf="sigops != null">
+                <td><ng-container i18n="transaction.sigops|Transaction Sigops">Sigops</ng-container>
+                  <a class="info-link" [routerLink]="['/docs/faq/' | relativeUrl]" fragment="what-are-sigops">
+                    <fa-icon [icon]="['fas', 'info-circle']" [fixedWidth]="true"></fa-icon>
+                  </a>
+                </td>
+                <td [innerHTML]="'&lrm;' + (sigops | number)"></td>
+              </tr>
               <tr>
-                <td i18n="transaction.hex">Transaction Hex</td>
+                <td i18n="transaction.hex">Transaction hex</td>
                 <td><a target="_blank" href="{{ network === '' ? '' : '/' + network }}/api/tx/{{ txId }}/hex"><fa-icon [icon]="['fas', 'external-link-alt']" [fixedWidth]="true"></fa-icon></a></td>
               </tr>
             </tbody>
@@ -246,42 +292,39 @@
 
   </ng-template>
 
-  <ng-template [ngIf]="isLoadingTx && !error">
+  <ng-template [ngIf]="(isLoadingTx && !error) || loadingCachedTx">
+    <br>
+    <ng-container *ngIf="flowEnabled">
+      <div class="title">
+        <h2 i18n="transaction.flow|Transaction flow">Flow</h2>
+      </div>
 
-    <div class="box">
-      <div class="row">
-        <div class="col-sm">
-          <table class="table table-borderless table-striped">
-            <tbody>
-              <tr>
-                <td class="td-width"><span class="skeleton-loader"></span></td>
-                <td><span class="skeleton-loader"></span></td>
-              </tr>
-              <tr>
-                <td><span class="skeleton-loader"></span></td>
-                <td><span class="skeleton-loader"></span></td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <div class="col-sm">
-          <table class="table table-borderless table-striped">
-            <tbody>
-              <tr>
-                <td class="td-width"><span class="skeleton-loader"></span></td>
-                <td><span class="skeleton-loader"></span></td>
-              </tr>
-              <tr>
-                <td><span class="skeleton-loader"></span></td>
-                <td><span class="skeleton-loader"></span></td>
-              </tr>
-            </tbody>
-          </table>
+      <div class="box">
+        <div class="graph-container" #graphContainer style="visibility: hidden;"></div>
+        <div class="row">
+          <div class="col-sm">
+            <table class="table table-borderless table-striped">
+              <tbody>
+                <tr>
+                  <td><span class="skeleton-loader"></span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="col-sm">
+            <table class="table table-borderless table-striped">
+              <tbody>
+                <tr>
+                  <td><span class="skeleton-loader"></span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
 
-    <br>
+      <br>
+    </ng-container>
 
     <div class="title">
       <h2 i18n="transaction.inputs-and-outputs|Transaction inputs and outputs">Inputs & Outputs</h2>
@@ -313,7 +356,7 @@
     <br>
 
     <div class="title">
-      <h2 i18n="transaction.details">Details</h2>
+      <h2 i18n="transaction.details|Transaction Details">Details</h2>
     </div>
 
     <div class="box">
@@ -359,7 +402,7 @@
 
   </ng-template>
 
-  <ng-template [ngIf]="error">
+  <ng-template [ngIf]="error && !loadingCachedTx">
 
     <div class="text-center" *ngIf="waitingForTransaction; else errorTemplate">
       <h3 i18n="transaction.error.transaction-not-found">Transaction not found.</h3>
@@ -368,45 +411,10 @@
     </div>
 
     <ng-template #errorTemplate>
-      <div class="text-center">
-        <h3>{{ error.error }}</h3>
-      </div>
+      <app-http-error [error]="error">
+        <span i18n="transaction.error.loading-transaction-data">Error loading transaction data.</span>
+      </app-http-error>
     </ng-template>
   </ng-template>
 
 </div>
-
-<br>
-
-<ng-template #feeTable>
-  <table class="table table-borderless table-striped">
-    <tbody>
-      <tr>
-        <td class="td-width" i18n="transaction.fee|Transaction fee">Fee</td>
-        <td>{{ tx.fee | number }} <span class="symbol" i18n="transaction.fee.sat|Transaction Fee sat">sat</span> <span class="fiat"><app-fiat [value]="tx.fee"></app-fiat></span></td>
-      </tr>
-      <tr>
-        <td i18n="transaction.fee-rate|Transaction fee rate">Fee rate</td>
-        <td>
-          {{ tx.feePerVsize | feeRounding }} <span class="symbol" i18n="shared.sat-vbyte|sat/vB">sat/vB</span>
-          <ng-template [ngIf]="tx.status.confirmed">
-            &nbsp;
-            <app-tx-fee-rating *ngIf="tx.fee && ((cpfpInfo && !cpfpInfo.bestDescendant && !cpfpInfo.ancestors.length) || !cpfpInfo)" [tx]="tx"></app-tx-fee-rating>
-          </ng-template>
-        </td>
-      </tr>
-      <tr *ngIf="cpfpInfo && (cpfpInfo.bestDescendant || cpfpInfo.ancestors.length)">
-        <td i18n="transaction.effective-fee-rate|Effective transaction fee rate">Effective fee rate</td>
-        <td>
-          <div class="effective-fee-container">
-            {{ tx.effectiveFeePerVsize | feeRounding }} <span class="symbol" i18n="shared.sat-vbyte|sat/vB">sat/vB</span>
-            <ng-template [ngIf]="tx.status.confirmed">
-              <app-tx-fee-rating class="d-none d-lg-inline ml-2" *ngIf="tx.fee" [tx]="tx"></app-tx-fee-rating>
-            </ng-template>
-          </div>
-          <button type="button" class="btn btn-outline-info btn-sm btn-small-height float-right" (click)="showCpfpDetails = !showCpfpDetails">CPFP <fa-icon [icon]="['fas', 'info-circle']" [fixedWidth]="true"></fa-icon></button>
-        </td>
-      </tr>
-    </tbody>
-  </table>
-</ng-template>

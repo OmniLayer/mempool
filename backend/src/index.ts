@@ -1,21 +1,16 @@
-import { Express, Request, Response, NextFunction } from 'express';
-import * as express from 'express';
+import express from 'express';
+import { Application, Request, Response, NextFunction } from 'express';
 import * as http from 'http';
 import * as WebSocket from 'ws';
-import * as cluster from 'cluster';
-import axios from 'axios';
-
+import bitcoinApi from './api/bitcoin/bitcoin-api-factory';
+import cluster from 'cluster';
 import DB from './database';
 import config from './config';
-import routes from './routes';
 import blocks from './api/blocks';
 import memPool from './api/mempool';
 import diskCache from './api/disk-cache';
-import statistics from './api/statistics';
+import statistics from './api/statistics/statistics';
 import websocketHandler from './api/websocket-handler';
-import fiatConversion from './api/fiat-conversion';
-import bisq from './api/bisq/bisq';
-import bisqMarkets from './api/bisq/markets';
 import logger from './logger';
 import backendInfo from './api/backend-info';
 import loadingIndicators from './api/loading-indicators';
@@ -25,16 +20,49 @@ import databaseMigration from './api/database-migration';
 import syncAssets from './sync-assets';
 import icons from './api/liquid/icons';
 import { Common } from './api/common';
-import mining from './api/mining';
-import HashratesRepository from './repositories/HashratesRepository';
-import BlocksRepository from './repositories/BlocksRepository';
 import poolsUpdater from './tasks/pools-updater';
+import indexer from './indexer';
+import nodesRoutes from './api/explorer/nodes.routes';
+import channelsRoutes from './api/explorer/channels.routes';
+import generalLightningRoutes from './api/explorer/general.routes';
+import lightningStatsUpdater from './tasks/lightning/stats-updater.service';
+import networkSyncService from './tasks/lightning/network-sync.service';
+import statisticsRoutes from './api/statistics/statistics.routes';
+import pricesRoutes from './api/prices/prices.routes';
+import miningRoutes from './api/mining/mining-routes';
+import liquidRoutes from './api/liquid/liquid.routes';
+import bitcoinRoutes from './api/bitcoin/bitcoin.routes';
+import servicesRoutes from './api/services/services-routes';
+import fundingTxFetcher from './tasks/lightning/sync-tasks/funding-tx-fetcher';
+import forensicsService from './tasks/lightning/forensics.service';
+import priceUpdater from './tasks/price-updater';
+import chainTips from './api/chain-tips';
+import { AxiosError } from 'axios';
+import v8 from 'v8';
+import { formatBytes, getBytesUnit } from './utils/format';
+import redisCache from './api/redis-cache';
+import accelerationApi from './api/services/acceleration';
+import bitcoinCoreRoutes from './api/bitcoin/bitcoin-core.routes';
+import bitcoinSecondClient from './api/bitcoin/bitcoin-second-client';
+import accelerationRoutes from './api/acceleration/acceleration.routes';
+import aboutRoutes from './api/about.routes';
+import mempoolBlocks from './api/mempool-blocks';
+import walletApi from './api/services/wallets';
+import stratumApi from './api/services/stratum';
 
 class Server {
   private wss: WebSocket.Server | undefined;
+  private wssUnixSocket: WebSocket.Server | undefined;
   private server: http.Server | undefined;
-  private app: Express;
-  private currentBackendRetryInterval = 5;
+  private serverUnixSocket: http.Server | undefined;
+  private app: Application;
+  private currentBackendRetryInterval = 1;
+  private backendRetryCount = 0;
+
+  private maxHeapSize: number = 0;
+  private heapLogInterval: number = 60;
+  private warnedHeapCritical: boolean = false;
+  private lastHeapLogTime: number | null = null;
 
   constructor() {
     this.app = express();
@@ -44,7 +72,7 @@ class Server {
       return;
     }
 
-    if (cluster.isMaster) {
+    if (cluster.isPrimary) {
       logger.notice(`Mempool Server (Master) is running on port ${config.MEMPOOL.HTTP_PORT} (${backendInfo.getShortCommitHash()})`);
 
       const numCPUs = config.MEMPOOL.SPAWN_CLUSTER_PROCS;
@@ -68,8 +96,37 @@ class Server {
     }
   }
 
-  async startServer(worker = false) {
-    logger.debug(`Starting Mempool Server${worker ? ' (worker)' : ''}... (${backendInfo.getShortCommitHash()})`);
+  async startServer(worker = false): Promise<void> {
+    logger.notice(`Starting Mempool Server${worker ? ' (worker)' : ''}... (${backendInfo.getShortCommitHash()})`);
+
+    // Register cleanup listeners for exit events
+    ['exit', 'SIGHUP', 'SIGINT', 'SIGTERM', 'SIGUSR1', 'SIGUSR2'].forEach(event => {
+      process.on(event, () => { this.onExit(event); });
+    });
+    process.on('uncaughtException', (error) => {
+      this.onUnhandledException('uncaughtException', error);
+    });
+    process.on('unhandledRejection', (reason, promise) => {
+      this.onUnhandledException('unhandledRejection', reason);
+    });
+
+    if (config.MEMPOOL.BACKEND === 'esplora') {
+      bitcoinApi.startHealthChecks();
+    }
+
+    if (config.DATABASE.ENABLED) {
+      DB.getPidLock();
+
+      await DB.checkDbConnection();
+      try {
+        if (process.env.npm_config_reindex_blocks === 'true') { // Re-index requests
+          await databaseMigration.$blocksReindexingTruncate();
+        }
+        await databaseMigration.$initializeOrMigrateDatabase();
+      } catch (e) {
+        throw new Error(e instanceof Error ? e.message : 'Error');
+      }
+    }
 
     this.app
       .use((req: Request, res: Response, next: NextFunction) => {
@@ -77,57 +134,67 @@ class Server {
         next();
       })
       .use(express.urlencoded({ extended: true }))
-      .use(express.text())
-    ;
+      .use(express.text({ type: ['text/plain', 'application/base64'] }))
+      .use(express.json())
+      ;
+
+    if (config.DATABASE.ENABLED && config.FIAT_PRICE.ENABLED) {
+      await priceUpdater.$initializeLatestPriceWithDb();
+    }
 
     this.server = http.createServer(this.app);
     this.wss = new WebSocket.Server({ server: this.server });
+    if (config.MEMPOOL.UNIX_SOCKET_PATH) {
+      this.serverUnixSocket = http.createServer(this.app);
+      this.wssUnixSocket = new WebSocket.Server({ server: this.serverUnixSocket });
+    }
 
     this.setUpWebsocketHandling();
 
+    await poolsUpdater.updatePoolsJson(); // Needs to be done before loading the disk cache because we sometimes wipe it
     await syncAssets.syncAssets$();
-    diskCache.loadMempoolCache();
-
-    if (config.DATABASE.ENABLED) {
-      await DB.checkDbConnection();
-      try {
-        if (process.env.npm_config_reindex !== undefined) { // Re-index requests
-          const tables = process.env.npm_config_reindex.split(',');
-          logger.warn(`Indexed data for "${process.env.npm_config_reindex}" tables will be erased in 5 seconds (using '--reindex')`);
-          await Common.sleep$(5000);
-          await databaseMigration.$truncateIndexedData(tables);
-        }
-        await databaseMigration.$initializeOrMigrateDatabase();
-        if (Common.indexingEnabled()) {
-          await this.$resetHashratesIndexingState();
-        }
-      } catch (e) {
-        throw new Error(e instanceof Error ? e.message : 'Error');
+    await mempoolBlocks.updatePools$();
+    if (config.MEMPOOL.ENABLED) {
+      if (config.MEMPOOL.CACHE_ENABLED) {
+        await diskCache.$loadMempoolCache();
+      } else if (config.REDIS.ENABLED) {
+        await redisCache.$loadCache();
       }
     }
 
-    if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED && cluster.isMaster) {
+    if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED && cluster.isPrimary) {
       statistics.startStatistics();
     }
 
     if (Common.isLiquid()) {
-      try {
-        icons.loadIcons();
-      } catch (e) {
-        logger.err('Cannot load liquid icons. Ignoring. Reason: ' + (e instanceof Error ? e.message : e));
-      }
+      const refreshIcons = () => {
+        try {
+          icons.loadIcons();
+        } catch (e) {
+          logger.err('Cannot load liquid icons. Ignoring. Reason: ' + (e instanceof Error ? e.message : e));
+        }
+      };
+      // Run once on startup.
+      refreshIcons();
+      // Matches crontab refresh interval for asset db.
+      setInterval(refreshIcons, 3600_000);
     }
 
-    fiatConversion.startService();
+    if (config.FIAT_PRICE.ENABLED) {
+      priceUpdater.$run();
+    }
+    await chainTips.updateOrphanedBlocks();
 
     this.setUpHttpApiRoutes();
-    this.runMainUpdateLoop();
 
-    if (config.BISQ.ENABLED) {
-      bisq.startBisqService();
-      bisq.setPriceCallbackFunction((price) => websocketHandler.setExtraInitProperties('bsq-price', price));
-      blocks.setNewBlockCallback(bisq.handleNewBitcoinBlock.bind(bisq));
-      bisqMarkets.startBisqService();
+    if (config.MEMPOOL.ENABLED) {
+      this.runMainUpdateLoop();
+    }
+
+    setInterval(() => { this.healthCheck(); }, 2500);
+
+    if (config.LIGHTNING.ENABLED) {
+      this.$runLightningBackend();
     }
 
     this.server.listen(config.MEMPOOL.HTTP_PORT, () => {
@@ -137,9 +204,22 @@ class Server {
         logger.notice(`Mempool Server is running on port ${config.MEMPOOL.HTTP_PORT}`);
       }
     });
+
+    if (this.serverUnixSocket) {
+      this.serverUnixSocket.listen(config.MEMPOOL.UNIX_SOCKET_PATH, () => {
+        if (worker) {
+          logger.info(`Mempool Server worker #${process.pid} started`);
+        } else {
+          logger.notice(`Mempool Server is listening on ${config.MEMPOOL.UNIX_SOCKET_PATH}`);
+        }
+      });
+    }
+
+    poolsUpdater.$startService();
   }
 
-  async runMainUpdateLoop() {
+  async runMainUpdateLoop(): Promise<void> {
+    const start = Date.now();
     try {
       try {
         await memPool.$updateMemPoolInfo();
@@ -151,248 +231,170 @@ class Server {
           logger.debug(msg);
         }
       }
-      await poolsUpdater.updatePoolsJson();
-      await blocks.$updateBlocks();
-      await memPool.$updateMempool();
-      this.$runIndexingWhenReady();
+      const newMempool = await bitcoinApi.$getRawMempool();
+      const minFeeMempool = memPool.limitGBT ? await bitcoinSecondClient.getRawMemPool() : null;
+      const minFeeTip = memPool.limitGBT ? await bitcoinSecondClient.getBlockCount() : -1;
+      const latestAccelerations = await accelerationApi.$updateAccelerations();
+      const numHandledBlocks = await blocks.$updateBlocks();
+      const pollRate = config.MEMPOOL.POLL_RATE_MS * (indexer.indexerIsRunning() ? 10 : 1);
+      if (numHandledBlocks === 0) {
+        await memPool.$updateMempool(newMempool, latestAccelerations, minFeeMempool, minFeeTip, pollRate);
+      }
+      indexer.$run();
+      if (config.WALLETS.ENABLED) {
+        // might take a while, so run in the background
+        walletApi.$syncWallets();
+      }
+      if (config.FIAT_PRICE.ENABLED) {
+        priceUpdater.$run();
+      }
 
-      setTimeout(this.runMainUpdateLoop.bind(this), config.MEMPOOL.POLL_RATE_MS);
-      this.currentBackendRetryInterval = 5;
-    } catch (e) {
-      const loggerMsg = `runMainLoop error: ${(e instanceof Error ? e.message : e)}. Retrying in ${this.currentBackendRetryInterval} sec.`;
-      if (this.currentBackendRetryInterval > 5) {
+      // rerun immediately if we skipped the mempool update, otherwise wait POLL_RATE_MS
+      const elapsed = Date.now() - start;
+      const remainingTime = Math.max(0, pollRate - elapsed);
+      setTimeout(this.runMainUpdateLoop.bind(this), numHandledBlocks > 0 ? 0 : remainingTime);
+      this.backendRetryCount = 0;
+    } catch (e: any) {
+      this.backendRetryCount++;
+      let loggerMsg = `Exception in runMainUpdateLoop() (count: ${this.backendRetryCount}). Retrying in ${this.currentBackendRetryInterval} sec.`;
+      loggerMsg += ` Reason: ${(e instanceof Error ? e.message : e)}.`;
+      if (e?.stack) {
+        loggerMsg += ` Stack trace: ${e.stack}`;
+      }
+      // When we get a first Exception, only `logger.debug` it and retry after 5 seconds
+      // From the second Exception, `logger.warn` the Exception and increase the retry delay
+      if (this.backendRetryCount >= 5) {
         logger.warn(loggerMsg);
         mempool.setOutOfSync();
       } else {
         logger.debug(loggerMsg);
       }
-      logger.debug(JSON.stringify(e));
+      if (e instanceof AxiosError) {
+        logger.debug(`AxiosError: ${e?.message}`);
+      }
       setTimeout(this.runMainUpdateLoop.bind(this), 1000 * this.currentBackendRetryInterval);
-      this.currentBackendRetryInterval *= 2;
-      this.currentBackendRetryInterval = Math.min(this.currentBackendRetryInterval, 60);
+    } finally {
+      diskCache.unlock();
     }
   }
 
-  async $resetHashratesIndexingState() {
+  async $runLightningBackend(): Promise<void> {
     try {
-      await HashratesRepository.$setLatestRun('last_hashrates_indexing', 0);
-      await HashratesRepository.$setLatestRun('last_weekly_hashrates_indexing', 0);
-    } catch (e) {
-      logger.err(`Cannot reset hashrate indexing timestamps. Reason: ` + (e instanceof Error ? e.message : e));
-    }
+      await fundingTxFetcher.$init();
+      await networkSyncService.$startService();
+      await lightningStatsUpdater.$startService();
+      await forensicsService.$startService();
+    } catch(e) {
+      logger.err(`Exception in $runLightningBackend. Restarting in 1 minute. Reason: ${(e instanceof Error ? e.message : e)}`);
+      await Common.sleep$(1000 * 60);
+      this.$runLightningBackend();
+    };
   }
 
-  async $runIndexingWhenReady() {
-    if (!Common.indexingEnabled() || mempool.hasPriority()) {
-      return;
-    }
-
-    try {
-      await blocks.$generateBlockDatabase();
-      await mining.$generateNetworkHashrateHistory();
-      await mining.$generatePoolHashrateHistory();
-    } catch (e) {
-      logger.err(`Indexing failed, trying again later. Reason: ` + (e instanceof Error ? e.message : e));
-    }
-  }
-
-  setUpWebsocketHandling() {
+  setUpWebsocketHandling(): void {
     if (this.wss) {
-      websocketHandler.setWebsocketServer(this.wss);
+      websocketHandler.addWebsocketServer(this.wss);
     }
+    if (this.wssUnixSocket) {
+      websocketHandler.addWebsocketServer(this.wssUnixSocket);
+    }
+
     if (Common.isLiquid() && config.DATABASE.ENABLED) {
       blocks.setNewBlockCallback(async () => {
         try {
           await elementsParser.$parse();
+          await elementsParser.$updateFederationUtxos();
         } catch (e) {
           logger.warn('Elements parsing error: ' + (e instanceof Error ? e.message : e));
         }
       });
     }
     websocketHandler.setupConnectionHandling();
-    statistics.setNewStatisticsEntryCallback(websocketHandler.handleNewStatistic.bind(websocketHandler));
-    blocks.setNewBlockCallback(websocketHandler.handleNewBlock.bind(websocketHandler));
-    memPool.setMempoolChangedCallback(websocketHandler.handleMempoolChange.bind(websocketHandler));
-    fiatConversion.setProgressChangedCallback(websocketHandler.handleNewConversionRates.bind(websocketHandler));
+    if (config.MEMPOOL.ENABLED) {
+      statistics.setNewStatisticsEntryCallback(websocketHandler.handleNewStatistic.bind(websocketHandler));
+      memPool.setAsyncMempoolChangedCallback(websocketHandler.$handleMempoolChange.bind(websocketHandler));
+      blocks.setNewAsyncBlockCallback(websocketHandler.handleNewBlock.bind(websocketHandler));
+    }
+    if (config.FIAT_PRICE.ENABLED) {
+      priceUpdater.setRatesChangedCallback(websocketHandler.handleNewConversionRates.bind(websocketHandler));
+    }
     loadingIndicators.setProgressChangedCallback(websocketHandler.handleLoadingChanged.bind(websocketHandler));
+
+    accelerationApi.connectWebsocket();
+    if (config.STRATUM.ENABLED) {
+      stratumApi.connectWebsocket();
+    }
   }
 
-  setUpHttpApiRoutes() {
-    this.app
-      .get(config.MEMPOOL.API_URL_PREFIX + 'transaction-times', routes.getTransactionTimes)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'cpfp/:txId', routes.getCpfpInfo)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'difficulty-adjustment', routes.getDifficultyChange)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'fees/recommended', routes.getRecommendedFees)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'fees/mempool-blocks', routes.getMempoolBlocks)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'backend-info', routes.getBackendInfo)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'init-data', routes.getInitData)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'validate-address/:address', routes.validateAddress)
-      .post(config.MEMPOOL.API_URL_PREFIX + 'tx/push', routes.$postTransactionForm)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'donations', async (req, res) => {
-        try {
-          const response = await axios.get('https://mempool.space/api/v1/donations', { responseType: 'stream', timeout: 10000 });
-          response.data.pipe(res);
-        } catch (e) {
-          res.status(500).end();
-        }
-      })
-      .get(config.MEMPOOL.API_URL_PREFIX + 'donations/images/:id', async (req, res) => {
-        try {
-          const response = await axios.get('https://mempool.space/api/v1/donations/images/' + req.params.id, {
-            responseType: 'stream', timeout: 10000
-          });
-          response.data.pipe(res);
-        } catch (e) {
-          res.status(500).end();
-        }
-      })
-      .get(config.MEMPOOL.API_URL_PREFIX + 'contributors', async (req, res) => {
-        try {
-          const response = await axios.get('https://mempool.space/api/v1/contributors', { responseType: 'stream', timeout: 10000 });
-          response.data.pipe(res);
-        } catch (e) {
-          res.status(500).end();
-        }
-      })
-      .get(config.MEMPOOL.API_URL_PREFIX + 'contributors/images/:id', async (req, res) => {
-        try {
-          const response = await axios.get('https://mempool.space/api/v1/contributors/images/' + req.params.id, {
-            responseType: 'stream', timeout: 10000
-          });
-          response.data.pipe(res);
-        } catch (e) {
-          res.status(500).end();
-        }
-      })
-      .get(config.MEMPOOL.API_URL_PREFIX + 'translators', async (req, res) => {
-        try {
-          const response = await axios.get('https://mempool.space/api/v1/translators', { responseType: 'stream', timeout: 10000 });
-          response.data.pipe(res);
-        } catch (e) {
-          res.status(500).end();
-        }
-      })
-      .get(config.MEMPOOL.API_URL_PREFIX + 'translators/images/:id', async (req, res) => {
-        try {
-          const response = await axios.get('https://mempool.space/api/v1/translators/images/' + req.params.id, {
-            responseType: 'stream', timeout: 10000
-          });
-          response.data.pipe(res);
-        } catch (e) {
-          res.status(500).end();
-        }
-      })
-    ;
-
-    if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED) {
-      this.app
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/2h', routes.$getStatisticsByTime.bind(routes, '2h'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/24h', routes.$getStatisticsByTime.bind(routes, '24h'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/1w', routes.$getStatisticsByTime.bind(routes, '1w'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/1m', routes.$getStatisticsByTime.bind(routes, '1m'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/3m', routes.$getStatisticsByTime.bind(routes, '3m'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/6m', routes.$getStatisticsByTime.bind(routes, '6m'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/1y', routes.$getStatisticsByTime.bind(routes, '1y'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/2y', routes.$getStatisticsByTime.bind(routes, '2y'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'statistics/3y', routes.$getStatisticsByTime.bind(routes, '3y'))
-        ;
+  setUpHttpApiRoutes(): void {
+    bitcoinRoutes.initRoutes(this.app);
+    if (config.MEMPOOL.OFFICIAL) {
+      bitcoinCoreRoutes.initRoutes(this.app);
     }
-
-    if (Common.indexingEnabled()) {
-      this.app
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/24h', routes.$getPools.bind(routes, '24h'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/3d', routes.$getPools.bind(routes, '3d'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/1w', routes.$getPools.bind(routes, '1w'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/1m', routes.$getPools.bind(routes, '1m'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/3m', routes.$getPools.bind(routes, '3m'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/6m', routes.$getPools.bind(routes, '6m'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/1y', routes.$getPools.bind(routes, '1y'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/2y', routes.$getPools.bind(routes, '2y'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/3y', routes.$getPools.bind(routes, '3y'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pools/all', routes.$getPools.bind(routes, 'all'))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pool/:slug/hashrate', routes.$getPoolHistoricalHashrate)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pool/:slug/blocks', routes.$getPoolBlocks)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pool/:slug/blocks/:height', routes.$getPoolBlocks)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pool/:slug', routes.$getPool)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/pool/:slug/:interval', routes.$getPool)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/hashrate/pools', routes.$getPoolsHistoricalHashrate)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/hashrate/pools/:interval', routes.$getPoolsHistoricalHashrate)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/hashrate', routes.$getHistoricalHashrate)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/hashrate/:interval', routes.$getHistoricalHashrate)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/reward-stats/:blockCount', routes.$getRewardStats)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/blocks/fees/:interval', routes.$getHistoricalBlockFees)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/blocks/rewards/:interval', routes.$getHistoricalBlockRewards)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/blocks/fee-rates/:interval', routes.$getHistoricalBlockFeeRates)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mining/blocks/sizes-weights/:interval', routes.$getHistoricalBlockSizeAndWeight)
-      ;
+    pricesRoutes.initRoutes(this.app);
+    if (config.STATISTICS.ENABLED && config.DATABASE.ENABLED && config.MEMPOOL.ENABLED) {
+      statisticsRoutes.initRoutes(this.app);
     }
-
-    if (config.BISQ.ENABLED) {
-      this.app
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/stats', routes.getBisqStats)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/tx/:txId', routes.getBisqTransaction)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/block/:hash', routes.getBisqBlock)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/blocks/tip/height', routes.getBisqTip)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/blocks/:index/:length', routes.getBisqBlocks)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/address/:address', routes.getBisqAddress)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/txs/:index/:length', routes.getBisqTransactions)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/currencies', routes.getBisqMarketCurrencies.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/depth', routes.getBisqMarketDepth.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/hloc', routes.getBisqMarketHloc.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/markets', routes.getBisqMarketMarkets.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/offers', routes.getBisqMarketOffers.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/ticker', routes.getBisqMarketTicker.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/trades', routes.getBisqMarketTrades.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/volumes', routes.getBisqMarketVolumes.bind(routes))
-        .get(config.MEMPOOL.API_URL_PREFIX + 'bisq/markets/volumes/7d', routes.getBisqMarketVolumes7d.bind(routes))
-        ;
+    if (Common.indexingEnabled() && config.MEMPOOL.ENABLED) {
+      miningRoutes.initRoutes(this.app);
     }
-
-    this.app
-      .get(config.MEMPOOL.API_URL_PREFIX + 'blocks-extras', routes.getBlocksExtras)
-      .get(config.MEMPOOL.API_URL_PREFIX + 'blocks-extras/:height', routes.getBlocksExtras);
-
-    if (config.MEMPOOL.BACKEND !== 'esplora') {
-      this.app
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mempool', routes.getMempool)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mempool/txids', routes.getMempoolTxIds)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'mempool/recent', routes.getRecentMempoolTransactions)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'tx/:txId', routes.getTransaction)
-        .post(config.MEMPOOL.API_URL_PREFIX + 'tx', routes.$postTransaction)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'tx/:txId/hex', routes.getRawTransaction)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'tx/:txId/status', routes.getTransactionStatus)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'tx/:txId/outspends', routes.getTransactionOutspends)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'block/:hash', routes.getBlock)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'block/:hash/header', routes.getBlockHeader)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'blocks', routes.getBlocks)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'blocks/:height', routes.getBlocks)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'blocks/tip/height', routes.getBlockTipHeight)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'block/:hash/txs', routes.getBlockTransactions)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'block/:hash/txs/:index', routes.getBlockTransactions)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'block/:hash/txids', routes.getTxIdsForBlock)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'block-height/:height', routes.getBlockHeight)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'address/:address', routes.getAddress)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'address/:address/txs', routes.getAddressTransactions)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'address/:address/txs/chain/:txId', routes.getAddressTransactions)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'address-prefix/:prefix', routes.getAddressPrefix)
-      ;
-    }
-
     if (Common.isLiquid()) {
-      this.app
-        .get(config.MEMPOOL.API_URL_PREFIX + 'assets/icons', routes.getAllLiquidIcon)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'assets/featured', routes.$getAllFeaturedLiquidAssets)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'asset/:assetId/icon', routes.getLiquidIcon)
-        .get(config.MEMPOOL.API_URL_PREFIX + 'assets/group/:id', routes.$getAssetGroup)
-      ;
+      liquidRoutes.initRoutes(this.app);
     }
+    if (config.LIGHTNING.ENABLED) {
+      generalLightningRoutes.initRoutes(this.app);
+      nodesRoutes.initRoutes(this.app);
+      channelsRoutes.initRoutes(this.app);
+    }
+    if (config.MEMPOOL_SERVICES.ACCELERATIONS) {
+      accelerationRoutes.initRoutes(this.app);
+    }
+    if (config.WALLETS.ENABLED) {
+      servicesRoutes.initRoutes(this.app);
+    }
+    if (!config.MEMPOOL.OFFICIAL) {
+      aboutRoutes.initRoutes(this.app);
+    }
+  }
 
-    if (Common.isLiquid() && config.DATABASE.ENABLED) {
-      this.app
-        .get(config.MEMPOOL.API_URL_PREFIX + 'liquid/pegs/month', routes.$getElementsPegsByMonth)
-      ;
+  healthCheck(): void {
+    const now = Date.now();
+    const stats = v8.getHeapStatistics();
+    this.maxHeapSize = Math.max(stats.used_heap_size, this.maxHeapSize);
+    const warnThreshold = 0.8 * stats.heap_size_limit;
+
+    const byteUnits = getBytesUnit(Math.max(this.maxHeapSize, stats.heap_size_limit));
+
+    if (!this.warnedHeapCritical && this.maxHeapSize > warnThreshold) {
+      this.warnedHeapCritical = true;
+      logger.warn(`Used ${(this.maxHeapSize / stats.heap_size_limit * 100).toFixed(2)}% of heap limit (${formatBytes(this.maxHeapSize, byteUnits, true)} / ${formatBytes(stats.heap_size_limit, byteUnits)})!`);
     }
+    if (this.lastHeapLogTime === null || (now - this.lastHeapLogTime) > (this.heapLogInterval * 1000)) {
+      logger.debug(`Memory usage: ${formatBytes(this.maxHeapSize, byteUnits)} / ${formatBytes(stats.heap_size_limit, byteUnits)}`);
+      this.warnedHeapCritical = false;
+      this.maxHeapSize = 0;
+      this.lastHeapLogTime = now;
+    }
+  }
+
+  onExit(exitEvent, code = 0): void {
+    logger.debug(`onExit for signal: ${exitEvent}`);
+    if (config.DATABASE.ENABLED) {
+      DB.releasePidLock();
+    }
+    this.server?.close();
+    this.serverUnixSocket?.close();
+    this.wss?.close();
+    if (this.wssUnixSocket) {
+      this.wssUnixSocket.close();
+    }
+    process.exit(code);
+  }
+
+  onUnhandledException(type, error): void {
+    console.error(`${type}:`, error);
+    this.onExit(type, 1);
   }
 }
 
-const server = new Server();
+((): Server => new Server())();
