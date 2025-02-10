@@ -2,8 +2,8 @@ import { Component, OnInit } from '@angular/core';
 import { ActivatedRoute, ParamMap } from '@angular/router';
 import { combineLatest, Observable } from 'rxjs';
 import { map, switchMap } from 'rxjs/operators';
-import { ApiService } from 'src/app/services/api.service';
-import { AssetsService } from 'src/app/services/assets.service';
+import { ApiService } from '@app/services/api.service';
+import { AssetsService } from '@app/services/assets.service';
 
 @Component({
   selector: 'app-asset-group',

@@ -2,9 +2,9 @@ import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
 import { map, shareReplay, switchMap } from 'rxjs/operators';
-import { StateService } from './state.service';
-import { environment } from 'src/environments/environment';
-import { AssetExtended } from '../interfaces/electrs.interface';
+import { StateService } from '@app/services/state.service';
+import { environment } from '@environments/environment';
+import { AssetExtended } from '@interfaces/electrs.interface';
 
 @Injectable({
   providedIn: 'root'
@@ -14,7 +14,7 @@ export class AssetsService {
 
   getAssetsJson$: Observable<{ array: AssetExtended[]; objects: any}>;
   getAssetsMinimalJson$: Observable<any>;
-  getMiningPools$: Observable<any>;
+  getWorldMapJson$: Observable<any>;
 
   constructor(
     private httpClient: HttpClient,
@@ -66,6 +66,7 @@ export class AssetsService {
       }),
       shareReplay(1),
     );
-    this.getMiningPools$ = this.httpClient.get(apiBaseUrl + '/resources/pools.json').pipe(shareReplay(1));
+
+    this.getWorldMapJson$ = this.httpClient.get(apiBaseUrl + '/resources/worldmap.json').pipe(shareReplay());
   }
 }

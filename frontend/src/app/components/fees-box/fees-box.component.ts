@@ -1,14 +1,10 @@
-import { Component, OnInit, ChangeDetectionStrategy } from '@angular/core';
-import { StateService } from 'src/app/services/state.service';
-import { map, filter } from 'rxjs/operators';
-import { merge, Observable } from 'rxjs';
-import { MempoolBlock } from 'src/app/interfaces/websocket.interface';
-
-interface FeeEstimations {
-  fastestFee: number;
-  halfHourFee: number;
-  hourFee: number;
-}
+import { Component, OnInit, ChangeDetectionStrategy, OnDestroy, ChangeDetectorRef } from '@angular/core';
+import { StateService } from '@app/services/state.service';
+import { Observable, combineLatest, Subscription } from 'rxjs';
+import { Recommendedfees } from '@interfaces/websocket.interface';
+import { feeLevels } from '@app/app.constants';
+import { map, startWith, tap } from 'rxjs/operators';
+import { ThemeService } from '@app/services/theme.service';
 
 @Component({
   selector: 'app-fees-box',
@@ -16,53 +12,56 @@ interface FeeEstimations {
   styleUrls: ['./fees-box.component.scss'],
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
-export class FeesBoxComponent implements OnInit {
-  feeEstimations$: Observable<FeeEstimations>;
-  isLoadingWebSocket$: Observable<boolean>;
-  defaultFee: number;
+export class FeesBoxComponent implements OnInit, OnDestroy {
+  isLoading$: Observable<boolean>;
+  recommendedFees$: Observable<Recommendedfees>;
+  themeSubscription: Subscription;
+  gradient = 'linear-gradient(to right, var(--skeleton-bg), var(--skeleton-bg))';
+  noPriority = 'var(--skeleton-bg)';
+  fees: Recommendedfees;
 
   constructor(
     private stateService: StateService,
+    private themeService: ThemeService,
+    private cd: ChangeDetectorRef,
   ) { }
 
   ngOnInit(): void {
-    this.defaultFee = this.stateService.network === 'liquid' || this.stateService.network === 'liquidtestnet' ? 0.1 : 1;
-
-    this.isLoadingWebSocket$ = this.stateService.isLoadingWebSocket$;
-    this.feeEstimations$ = this.stateService.mempoolBlocks$
+    this.isLoading$ = combineLatest(
+      this.stateService.isLoadingWebSocket$.pipe(startWith(false)),
+      this.stateService.loadingIndicators$.pipe(startWith({ mempool: 0 })),
+    ).pipe(map(([socket, indicators]) => {
+      return socket || (indicators.mempool != null && indicators.mempool !== 100);
+    }));
+    this.recommendedFees$ = this.stateService.recommendedFees$
       .pipe(
-        map((pBlocks) => {
-          if (!pBlocks.length) {
-            return {
-              'fastestFee': this.defaultFee,
-              'halfHourFee': this.defaultFee,
-              'hourFee': this.defaultFee,
-            };
-          }
-
-          const firstMedianFee = this.optimizeMedianFee(pBlocks[0], pBlocks[1]);
-          const secondMedianFee = pBlocks[1] ? this.optimizeMedianFee(pBlocks[1], pBlocks[2], firstMedianFee) : this.defaultFee;
-          const thirdMedianFee = pBlocks[2] ? this.optimizeMedianFee(pBlocks[2], pBlocks[3], secondMedianFee) : this.defaultFee;
-
-          return {
-            'fastestFee': firstMedianFee,
-            'halfHourFee': secondMedianFee,
-            'hourFee': thirdMedianFee,
-          };
-        })
-      );
+        tap((fees) => {
+          this.fees = fees;
+          this.setFeeGradient();
+        }
+      )
+    );
+    this.themeSubscription = this.themeService.themeChanged$.subscribe(() => {
+      this.setFeeGradient();
+    })
   }
 
-  private optimizeMedianFee(pBlock: MempoolBlock, nextBlock: MempoolBlock | undefined, previousFee?: number): number {
-    const useFee = previousFee ? (pBlock.medianFee + previousFee) / 2 : pBlock.medianFee;
-    if (pBlock.blockVSize <= 500000) {
-      return this.defaultFee;
-    }
-    if (pBlock.blockVSize <= 950000 && !nextBlock) {
-      const multiplier = (pBlock.blockVSize - 500000) / 500000;
-      return Math.max(Math.round(useFee * multiplier), this.defaultFee);
-    }
-    return Math.ceil(useFee);
+  setFeeGradient() {
+    let feeLevelIndex = feeLevels.slice().reverse().findIndex((feeLvl) => this.fees.minimumFee >= feeLvl);
+    feeLevelIndex = feeLevelIndex >= 0 ? feeLevels.length - feeLevelIndex : feeLevelIndex;
+    const startColor = '#' + (this.themeService.mempoolFeeColors[feeLevelIndex - 1] || this.themeService.mempoolFeeColors[this.themeService.mempoolFeeColors.length - 1]);
+
+    feeLevelIndex = feeLevels.slice().reverse().findIndex((feeLvl) => this.fees.fastestFee >= feeLvl);
+    feeLevelIndex = feeLevelIndex >= 0 ? feeLevels.length - feeLevelIndex : feeLevelIndex;
+    const endColor = '#' + (this.themeService.mempoolFeeColors[feeLevelIndex - 1] || this.themeService.mempoolFeeColors[this.themeService.mempoolFeeColors.length - 1]);
+
+    this.gradient = `linear-gradient(to right, ${startColor}, ${endColor})`;
+    this.noPriority = startColor;
+
+    this.cd.markForCheck();
   }
 
+  ngOnDestroy(): void {
+    this.themeSubscription.unsubscribe();
+  }
 }

@@ -1,8 +1,8 @@
 import { DOCUMENT } from '@angular/common';
 import { ChangeDetectionStrategy, Component, Inject, OnInit } from '@angular/core';
-import { FormBuilder, FormGroup } from '@angular/forms';
-import { languages } from 'src/app/app.constants';
-import { LanguageService } from 'src/app/services/language.service';
+import { UntypedFormBuilder, UntypedFormGroup } from '@angular/forms';
+import { languages } from '@app/app.constants';
+import { LanguageService } from '@app/services/language.service';
 
 @Component({
   selector: 'app-language-selector',
@@ -11,12 +11,12 @@ import { LanguageService } from 'src/app/services/language.service';
   changeDetection: ChangeDetectionStrategy.OnPush
 })
 export class LanguageSelectorComponent implements OnInit {
-  languageForm: FormGroup;
+  languageForm: UntypedFormGroup;
   languages = languages;
 
   constructor(
     @Inject(DOCUMENT) private document: Document,
-    private formBuilder: FormBuilder,
+    private formBuilder: UntypedFormBuilder,
     private languageService: LanguageService,
   ) { }
 

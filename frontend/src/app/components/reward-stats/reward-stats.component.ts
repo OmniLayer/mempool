@@ -1,8 +1,8 @@
 import { ChangeDetectionStrategy, Component, OnInit } from '@angular/core';
 import { concat, Observable } from 'rxjs';
 import { map, switchMap, tap } from 'rxjs/operators';
-import { ApiService } from 'src/app/services/api.service';
-import { StateService } from 'src/app/services/state.service';
+import { ApiService } from '@app/services/api.service';
+import { StateService } from '@app/services/state.service';
 
 @Component({
   selector: 'app-reward-stats',
@@ -29,11 +29,12 @@ export class RewardStatsComponent implements OnInit {
       // Or when we receive a newer block, newer than the latest reward stats api call
       this.stateService.blocks$
         .pipe(
-          switchMap((block) => {
-            if (block[0].height <= this.lastBlockHeight) {
+          switchMap((blocks) => {
+            const maxHeight = blocks.reduce((max, block) => Math.max(max, block.height), 0);
+            if (maxHeight <= this.lastBlockHeight) {
               return []; // Return an empty stream so the last pipe is not executed
             }
-            this.lastBlockHeight = block[0].height;
+            this.lastBlockHeight = maxHeight;
             return this.apiService.getRewardStats$();
           })
         )
@@ -42,10 +43,14 @@ export class RewardStatsComponent implements OnInit {
         map((stats) => {
           return {
             totalReward: stats.totalReward,
-            rewardPerTx: stats.totalReward / stats.totalTx,
             feePerTx: stats.totalFee / stats.totalTx,
+            feePerBlock: stats.totalFee / 144,
           };
         })
       );
+  }
+
+  isEllipsisActive(e) {
+    return (e.offsetWidth < e.scrollWidth);
   }
 }

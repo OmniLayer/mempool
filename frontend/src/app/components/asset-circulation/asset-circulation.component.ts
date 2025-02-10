@@ -1,11 +1,10 @@
 import { ChangeDetectionStrategy, Component, Inject, Input, LOCALE_ID, OnInit } from '@angular/core';
 import { combineLatest, Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
-import { moveDec } from 'src/app/bitcoin.utils';
-import { AssetsService } from 'src/app/services/assets.service';
-import { ElectrsApiService } from 'src/app/services/electrs-api.service';
-import { formatNumber } from '@angular/common';
-import { environment } from 'src/environments/environment';
+import { moveDec } from '@app/bitcoin.utils';
+import { AssetsService } from '@app/services/assets.service';
+import { ElectrsApiService } from '@app/services/electrs-api.service';
+import { environment } from '@environments/environment';
 
 @Component({
   selector: 'app-asset-circulation',

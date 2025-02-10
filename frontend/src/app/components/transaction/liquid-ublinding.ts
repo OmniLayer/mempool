@@ -1,4 +1,4 @@
-import { Transaction } from '../../interfaces/electrs.interface';
+import { Transaction } from '@interfaces/electrs.interface';
 
   // Parse the blinders data from a string encoded as a comma separated list, in the following format:
   // <value_in_satoshis>,<asset_tag_hex>,<amount_blinder_hex>,<asset_blinder_hex>
@@ -34,7 +34,7 @@ export class LiquidUnblinding {
   }
 
   async makeCommitmentMap(blinders: any) {
-    const libwally = await import('./libwally.js');
+    const libwally = await import('@components/transaction/libwally.js');
     await libwally.load();
     const commitments = new Map();
     blinders.forEach(b => {
@@ -126,9 +126,13 @@ export class LiquidUnblinding {
   }
 
   async checkUnblindedTx(tx: Transaction) {
-    const windowLocationHash = window.location.hash.substring('#blinded='.length);
-    if (windowLocationHash.length > 0) {
-      const blinders = this.parseBlinders(windowLocationHash);
+    if (!window.location.hash?.length) {
+      return tx;
+    }
+    const fragmentParams = new URLSearchParams(window.location.hash.slice(1) || '');
+    const blinderStr = fragmentParams.get('blinded');
+    if (blinderStr && blinderStr.length) {
+      const blinders = this.parseBlinders(blinderStr);
       if (blinders) {
         this.commitments = await this.makeCommitmentMap(blinders);
         return this.tryUnblindTx(tx);

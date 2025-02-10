@@ -11,6 +11,7 @@ module.exports = {
   encryptWallet: 'encryptwallet',
   estimateFee: 'estimatefee', // bitcoind v0.10.0x
   estimatePriority: 'estimatepriority', // bitcoind v0.10.0+
+  estimateSmartFee: 'estimatesmartfee',
   generate: 'generate', // bitcoind v0.11.0+
   getAccount: 'getaccount',
   getAccountAddress: 'getaccountaddress',
@@ -82,11 +83,15 @@ module.exports = {
   signRawTransaction: 'signrawtransaction', // bitcoind v0.7.0+
   stop: 'stop',
   submitBlock: 'submitblock', // bitcoind v0.7.0+
+  submitPackage: 'submitpackage',
   validateAddress: 'validateaddress',
   verifyChain: 'verifychain', // bitcoind v0.9.0+
   verifyMessage: 'verifymessage',
   verifyTxOutProof: 'verifytxoutproof', // bitcoind v0.11.0+
   walletLock: 'walletlock',
   walletPassphrase: 'walletpassphrase',
-  walletPassphraseChange: 'walletpassphrasechange'
-}
+  walletPassphraseChange: 'walletpassphrasechange',
+  getTxoutSetinfo: 'gettxoutsetinfo',
+  getIndexInfo: 'getindexinfo',
+  testMempoolAccept: 'testmempoolaccept',
+};

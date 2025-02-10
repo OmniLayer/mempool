@@ -73,6 +73,14 @@ export namespace IBitcoinApi {
     time: number;                    //  (numeric) Same as blocktime
   }
 
+  export interface VerboseBlock extends Block {
+    tx: VerboseTransaction[];        // The transactions in the format of the getrawtransaction RPC. Different from verbosity = 1 "tx" result
+  }
+
+  export interface VerboseTransaction extends Transaction {
+    fee?: number;                   //  (numeric) The transaction fee in BTC, omitted if block undo data is not available
+  }
+
   export interface Vin {
     txid?: string;                   //  (string) The transaction id
     vout?: number;                   //  (string)
@@ -98,6 +106,7 @@ export namespace IBitcoinApi {
       address?: string;              //  (string) bitcoin address
       addresses?: string[];           //  (string) bitcoin addresses
       pegout_chain?: string;         //  (string) Elements peg-out chain
+      pegout_address?: string;       //  (string) Elements peg-out address
       pegout_addresses?: string[];   //  (string) Elements peg-out addresses
     };
   }
@@ -164,4 +173,66 @@ export namespace IBitcoinApi {
     }
   }
 
+  export interface BlockStats {
+    "avgfee": number;
+    "avgfeerate": number;
+    "avgtxsize": number;
+    "blockhash": string;
+    "feerate_percentiles": [number, number, number, number, number];
+    "height": number;
+    "ins": number;
+    "maxfee": number;
+    "maxfeerate": number;
+    "maxtxsize": number;
+    "medianfee": number;
+    "mediantime": number;
+    "mediantxsize": number;
+    "minfee": number;
+    "minfeerate": number;
+    "mintxsize": number;
+    "outs": number;
+    "subsidy": number;
+    "swtotal_size": number;
+    "swtotal_weight": number;
+    "swtxs": number;
+    "time": number;
+    "total_out": number;
+    "total_size": number;
+    "total_weight": number;
+    "totalfee": number;
+    "txs": number;
+    "utxo_increase": number;
+    "utxo_size_inc": number;
+  }
+}
+
+export interface TestMempoolAcceptResult {
+  txid: string,
+  wtxid: string,
+  allowed?: boolean,
+  vsize?: number,
+  fees?: {
+    base: number,
+    "effective-feerate": number,
+    "effective-includes": string[],
+  },
+  ['reject-reason']?: string,
+}
+
+export interface SubmitPackageResult {
+  package_msg: string;
+  "tx-results": { [wtxid: string]: TxResult };
+  "replaced-transactions"?: string[];
+}
+
+export interface TxResult {
+  txid: string;
+  "other-wtxid"?: string;
+  vsize?: number;
+  fees?: {
+    base: number;
+    "effective-feerate"?: number;
+    "effective-includes"?: string[];
+  };
+  error?: string;
 }

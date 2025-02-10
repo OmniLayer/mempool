@@ -1,5 +1,4 @@
-import 'zone.js/node';
-import './generated-config';
+import './src/resources/config.js';
 
 import * as domino from 'domino';
 import * as express from 'express';
@@ -21,7 +20,6 @@ win.matchMedia = () => {
     matches: true
   };
 };
-
 // @ts-ignore
 win.setTimeout = (fn) => { fn(); };
 win.document.body.scrollTo = (() => {});
@@ -51,18 +49,28 @@ function getActiveLocales() {
     ...Object.keys(angularConfig.projects.mempool.i18n.locales),
   ];
 
-  return supportedLocales.filter(locale => existsSync(`./dist/mempool/server/${locale}`));
+  return supportedLocales.filter(locale => locale === 'en-US' && existsSync(`./dist/mempool/server/${locale}`));
+  // return supportedLocales.filter(locale => existsSync(`./dist/mempool/server/${locale}`));
 }
 
 function app() {
   const server = express();
 
+  // proxy websocket
+  server.get('/api/v1/ws', createProxyMiddleware({
+    target: 'ws://localhost:4200/api/v1/ws',
+    changeOrigin: true,
+    ws: true,
+    logLevel: 'debug'
+  }));
   // proxy API to nginx
   server.get('/api/**', createProxyMiddleware({
     // @ts-ignore
     target: win.__env.NGINX_PROTOCOL + '://' + win.__env.NGINX_HOSTNAME + ':' + win.__env.NGINX_PORT,
     changeOrigin: true,
   }));
+  server.get('/resources/**', express.static('./src'));
+
 
   // map / and /en to en-US
   const defaultLocale = 'en-US';
